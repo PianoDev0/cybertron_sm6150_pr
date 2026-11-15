@@ -132,3 +132,7 @@ Android.bp
 # Build output directories
 /out/
 /build/
+
+# KernelSU
+/KernelSU/
+/drivers/kernelsu

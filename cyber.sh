@@ -2,7 +2,7 @@
 #
 # Cybertron Kernel Build Script (cyber.sh)
 # Targets: Motorola SM6150 (Moto G40/G60 [hanoip] / Motorola One Fusion+ [liber])
-# Base: Linux 4.14.357-openela
+# Base: Linux 4.14.357-openela (Cybertron Kernel v19 - ccache accelerated)
 # Maintainer: cool585 (DhineshCool)
 #
 
@@ -56,6 +56,7 @@ DEVICE="liber"
 CLEAN_BUILD=0
 MENUCONFIG=0
 UPDATE_TC=0
+ENABLE_KSU=${ENABLE_KSU:-0}
 
 # Parse Command-Line Arguments
 show_help() {
@@ -67,6 +68,7 @@ show_help() {
     echo ""
     echo -e "${BOLD}Options:${NC}"
     echo "  -c, --clean             Clean out directory before building"
+    echo "  -k, --ksu               Build kernel with KernelSU (manipvlator/KernelSU)"
     echo "  -m, --menuconfig        Launch kernel menuconfig interface"
     echo "  -u, --update-toolchain  Update Neutron-Clang toolchain via antman"
     echo "  -h, --help              Show this help message"
@@ -74,6 +76,7 @@ show_help() {
     echo -e "${BOLD}Examples:${NC}"
     echo "  $0 liber"
     echo "  $0 hanoip --clean"
+    echo "  $0 liber --ksu"
     echo "  $0 liber -m"
     exit 0
 }
@@ -86,6 +89,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -c|--clean)
             CLEAN_BUILD=1
+            shift
+            ;;
+        -k|--ksu)
+            ENABLE_KSU=1
             shift
             ;;
         -m|--menuconfig)
@@ -105,6 +112,32 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Detect Target Branch (from environment or git repository)
+DETECTED_BRANCH="${TARGET_BRANCH:-${BRANCH:-${GITHUB_REF_NAME:-}}}"
+if [ -z "${DETECTED_BRANCH}" ] && [ -d "${KERNEL_ROOT}/.git" ]; then
+    DETECTED_BRANCH="$(git -C "${KERNEL_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+fi
+
+# Automatically enable KernelSU if branch name ends with 'ksu' (case-insensitive)
+if [[ "${DETECTED_BRANCH,,}" == *ksu ]] || [ "${KSU:-0}" -eq 1 ]; then
+    ENABLE_KSU=1
+fi
+
+# Derive kernel version tag from branch name (e.g. v19, v20, v21)
+CLEAN_VER="${DETECTED_BRANCH}"
+if [[ "${CLEAN_VER,,}" == *-ksu ]]; then
+    CLEAN_VER="${CLEAN_VER%-*}"
+elif [[ "${CLEAN_VER,,}" == *_ksu ]]; then
+    CLEAN_VER="${CLEAN_VER%_*}"
+elif [[ "${CLEAN_VER,,}" == *ksu ]] && [ "${#CLEAN_VER}" -gt 3 ]; then
+    CLEAN_VER="${CLEAN_VER%[kK][sS][uU]}"
+fi
+
+# Fallback to v19 if branch is detached or empty
+if [ -z "${CLEAN_VER}" ] || [ "${CLEAN_VER}" = "HEAD" ]; then
+    CLEAN_VER="v19"
+fi
 
 # Device-Specific Configurations
 case "${DEVICE}" in
@@ -150,14 +183,16 @@ export SUBARCH=arm64
 
 echo -e "${CYAN}${BOLD}"
 echo "=================================================="
-echo "          Cybertron Kernel Builder (v19)          "
+echo "          Cybertron Kernel Builder (${CLEAN_VER})          "
 echo "=================================================="
 echo -e "${NC}"
 echo -e " Target Device : ${GREEN}${BOLD}${DEVICE_NAME}${NC}"
 echo -e " Defconfig     : ${GREEN}${DEFCONFIG}${NC}"
 echo -e " Kernel Root   : ${KERNEL_ROOT}"
+echo -e " Kernel Ver    : ${GREEN}${CLEAN_VER}${NC}"
 echo -e " Out Directory : ${OUT_DIR}"
 echo -e " AnyKernel Dir : ${ZIP_DIR}"
+echo -e " KernelSU      : $([ "${ENABLE_KSU}" -eq 1 ] && echo -e "${GREEN}${BOLD}Enabled (manipvlator/KernelSU)${NC}" || echo -e "${YELLOW}Disabled${NC}")"
 echo -e " Build Threads : $(nproc --all)"
 echo "--------------------------------------------------"
 
@@ -195,8 +230,9 @@ fi
 
 # Setup Neutron-Clang Toolchain
 NEUTRON_DIR="${NEUTRON_DIR:-${TOOLCHAINS_ROOT}/neutron-clang}"
-if [ ! -d "${NEUTRON_DIR}" ] || [ ! -f "${NEUTRON_DIR}/bin/clang" ]; then
+if [ ! -d "${NEUTRON_DIR}" ] || [ ! -f "${NEUTRON_DIR}/bin/clang" ] || ! "${NEUTRON_DIR}/bin/clang" --version &>/dev/null; then
     echo -e "${YELLOW}[INFO]: Initializing Neutron-Clang Toolchain via antman...${NC}"
+    rm -rf "${NEUTRON_DIR}"
     mkdir -p "${NEUTRON_DIR}"
     cd "${NEUTRON_DIR}"
     curl -sSLo antman "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
@@ -214,8 +250,9 @@ fi
 
 # Setup ARM GNU Toolchain (for 64-bit cross-compile binutils/libgcc)
 GCC_DIR="${GCC_DIR:-${TOOLCHAINS_ROOT}/gcc/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu}"
-if [ ! -d "${GCC_DIR}" ] || [ ! -f "${GCC_DIR}/bin/aarch64-none-linux-gnu-gcc" ]; then
+if [ ! -d "${GCC_DIR}" ] || [ ! -f "${GCC_DIR}/bin/aarch64-none-linux-gnu-gcc" ] || ! "${GCC_DIR}/bin/aarch64-none-linux-gnu-gcc" --version &>/dev/null; then
     echo -e "${YELLOW}[INFO]: Downloading ARM GNU Toolchain 14.2.rel1...${NC}"
+    rm -rf "${GCC_DIR}"
     mkdir -p "${TOOLCHAINS_ROOT}/gcc"
     cd "${TOOLCHAINS_ROOT}/gcc"
     curl -LO "https://developer.arm.com/-/media/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
@@ -231,15 +268,37 @@ export LD_LIBRARY_PATH="${NEUTRON_DIR}/lib:${LD_LIBRARY_PATH}"
 
 BUILD_CROSS_COMPILE="${GCC_DIR}/bin/aarch64-none-linux-gnu-"
 
-# Ccache Configuration
+# Compiler & Ccache Configuration
+# Using an executable wrapper script ensures CC and HOSTCC are single valid binary paths,
+# preventing Kbuild scripts (which $(CC), cc-can-link) from breaking on multi-word strings.
 if command -v ccache &>/dev/null; then
-    CC_BIN="ccache ${NEUTRON_PATH}/clang"
+    CCACHE_BIN_DIR="${HOME}/.ccache_bin"
+    mkdir -p "${CCACHE_BIN_DIR}"
+    cat << 'EOF' > "${CCACHE_BIN_DIR}/clang"
+#!/usr/bin/env bash
+exec ccache "${NEUTRON_PATH}/clang" "$@"
+EOF
+    cat << 'EOF' > "${CCACHE_BIN_DIR}/clang++"
+#!/usr/bin/env bash
+exec ccache "${NEUTRON_PATH}/clang++" "$@"
+EOF
+    chmod +x "${CCACHE_BIN_DIR}/clang" "${CCACHE_BIN_DIR}/clang++"
+
     export CCACHE_DIR="${HOME}/.ccache"
-    export CCACHE_EXEC="$(command -v ccache)"
+    export CCACHE_MAXSIZE="2G"
+    export CCACHE_COMPRESS=1
+    export CCACHE_COMPRESSLEVEL=6
+    export CCACHE_SLOPPINESS="file_macro,time_macros,include_file_mtime"
     export USE_CCACHE=1
-    echo -e "${BLUE}[INFO]: Using ccache for accelerated builds.${NC}"
+
+    CC_BIN="${CCACHE_BIN_DIR}/clang"
+    HOSTCC_BIN="${CCACHE_BIN_DIR}/clang"
+    HOSTCXX_BIN="${CCACHE_BIN_DIR}/clang++"
+    echo -e "${BLUE}[INFO]: Accelerated builds enabled via ccache (${CC_BIN}).${NC}"
 else
     CC_BIN="${NEUTRON_PATH}/clang"
+    HOSTCC_BIN="${NEUTRON_PATH}/clang"
+    HOSTCXX_BIN="${NEUTRON_PATH}/clang++"
 fi
 
 # Assemble Build Options
@@ -260,8 +319,8 @@ BUILD_OPTIONS=(
     OBJCOPY="${NEUTRON_PATH}/llvm-objcopy"
     OBJDUMP="${NEUTRON_PATH}/llvm-objdump"
     READELF="${NEUTRON_PATH}/llvm-readelf"
-    HOSTCC="${NEUTRON_PATH}/clang"
-    HOSTCXX="${NEUTRON_PATH}/clang++"
+    HOSTCC="${HOSTCC_BIN}"
+    HOSTCXX="${HOSTCXX_BIN}"
     DTC_EXT="$(command -v dtc || echo /usr/bin/dtc)"
 )
 
@@ -271,9 +330,50 @@ if [ "${CLEAN_BUILD}" -eq 1 ]; then
     rm -rf "${OUT_DIR}"/*
 fi
 
+# Setup KernelSU if enabled
+if [ "${ENABLE_KSU}" -eq 1 ]; then
+    echo -e "${CYAN}${BOLD}[INFO]: Setting up KernelSU (manipvlator/KernelSU)...${NC}"
+    if [ ! -d "${KERNEL_ROOT}/KernelSU" ]; then
+        echo -e "${YELLOW}[INFO]: Cloning KernelSU from https://github.com/manipvlator/KernelSU.git...${NC}"
+        git clone --depth=1 https://github.com/manipvlator/KernelSU.git "${KERNEL_ROOT}/KernelSU"
+    fi
+
+    if [ ! -L "${KERNEL_ROOT}/drivers/kernelsu" ] && [ ! -d "${KERNEL_ROOT}/drivers/kernelsu" ]; then
+        echo -e "${BLUE}[INFO]: Creating symlink drivers/kernelsu -> ../KernelSU/kernel...${NC}"
+        ln -sf ../KernelSU/kernel "${KERNEL_ROOT}/drivers/kernelsu"
+    fi
+
+    if ! grep -q "kernelsu" "${KERNEL_ROOT}/drivers/Makefile"; then
+        echo -e "${BLUE}[INFO]: Adding kernelsu driver entry to drivers/Makefile...${NC}"
+        printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> "${KERNEL_ROOT}/drivers/Makefile"
+    fi
+
+    if ! grep -q "drivers/kernelsu/Kconfig" "${KERNEL_ROOT}/drivers/Kconfig"; then
+        echo -e "${BLUE}[INFO]: Sourcing drivers/kernelsu/Kconfig in drivers/Kconfig...${NC}"
+        sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' "${KERNEL_ROOT}/drivers/Kconfig"
+    fi
+else
+    # Non-KSU build: ensure missing kernelsu does not cause Kconfig parse error
+    if [ ! -e "${KERNEL_ROOT}/drivers/kernelsu" ]; then
+        if grep -q "kernelsu" "${KERNEL_ROOT}/drivers/Makefile"; then
+            sed -i '/kernelsu/d' "${KERNEL_ROOT}/drivers/Makefile"
+        fi
+        if grep -q "drivers/kernelsu/Kconfig" "${KERNEL_ROOT}/drivers/Kconfig"; then
+            sed -i '/drivers\/kernelsu\/Kconfig/d' "${KERNEL_ROOT}/drivers/Kconfig"
+        fi
+    fi
+fi
+
 # Step 1: Configure Defconfig
 echo -e "${BLUE}[INFO]: Loading ${DEFCONFIG}...${NC}"
 make "${BUILD_OPTIONS[@]}" "${DEFCONFIG}"
+
+# Apply KernelSU configuration
+if [ "${ENABLE_KSU}" -eq 1 ]; then
+    echo -e "${BLUE}[INFO]: Enabling CONFIG_KSU in kernel configuration...${NC}"
+    "${KERNEL_ROOT}/scripts/config" --file "${OUT_DIR}/.config" --enable CONFIG_KSU
+    make "${BUILD_OPTIONS[@]}" olddefconfig
+fi
 
 # Step 2: Interactive Menuconfig if requested
 if [ "${MENUCONFIG}" -eq 1 ]; then
@@ -309,6 +409,13 @@ SECONDS=$((BUILD_DURATION % 60))
 
 echo -e "\n${GREEN}${BOLD}[SUCCESS]: Kernel compilation completed in ${MINUTES}m ${SECONDS}s!${NC}\n"
 
+# Display Ccache Performance Statistics if enabled
+if command -v ccache &>/dev/null && [ -d "${CCACHE_DIR:-${HOME}/.ccache}" ]; then
+    echo -e "${CYAN}${BOLD}=== Ccache Performance Stats ===${NC}"
+    ccache -s || true
+    echo "================================"
+fi
+
 # Step 4: Copy Artifacts to Build Directory
 cp -f "${KERNEL_IMG}" "${BUILD_DIR}/Image.gz"
 if [ -f "${OUT_DIR}/arch/arm64/boot/Image" ]; then
@@ -317,7 +424,13 @@ fi
 
 # Step 5: Packaging with AnyKernel3
 TIMESTAMP=$(date +"%Y%m%d-%H%M")
-ZIP_NAME="Cybertron-v19-${DEVICE}-${TIMESTAMP}.zip"
+if [ "${ENABLE_KSU}" -eq 1 ]; then
+    ZIP_NAME="Cybertron-${CLEAN_VER}-${DEVICE}-KSU-${TIMESTAMP}.zip"
+    ZIP_ALIAS="${DEVICE}-ksu.zip"
+else
+    ZIP_NAME="Cybertron-${CLEAN_VER}-${DEVICE}-${TIMESTAMP}.zip"
+    ZIP_ALIAS="${DEVICE}.zip"
+fi
 
 # Auto-clone AnyKernel3 if missing
 if [ ! -d "${ZIP_DIR}" ]; then
@@ -370,14 +483,31 @@ if [ -d "${ZIP_DIR}" ]; then
 
     # Update version banner if version file exists
     if [ -f "version" ]; then
-        sed -i "s/Cybertron-V[0-9]\+.*\"/Cybertron-v19\"/g" version 2>/dev/null || true
-        sed -i "s/Cybertron-v[0-9]\+.*\"/Cybertron-v19\"/g" version 2>/dev/null || true
+        if [ "${ENABLE_KSU}" -eq 1 ]; then
+            sed -i "s/\"Cybertron[^\"]*\"/\"Cybertron-${CLEAN_VER}-KSU\"/g" version 2>/dev/null || true
+        else
+            sed -i "s/\"Cybertron[^\"]*\"/\"Cybertron-${CLEAN_VER}\"/g" version 2>/dev/null || true
+        fi
+        sed -i "s/For [a-zA-Z0-9_-]\+/For ${DEVICE}/g" version 2>/dev/null || true
     fi
 
-    # Configure anykernel.sh device name dynamically
+    # Configure anykernel.sh dynamically
     if [ -f "anykernel.sh" ]; then
         sed -i "s/device.name1=.*/device.name1=${DEVICE}/g" anykernel.sh
         sed -i "s/device.name2=.*/device.name2=${DEVICE}/g" anykernel.sh
+
+        # Extract numeric version if available (e.g. 20 from v20, 19 from v19)
+        VER_NUM="${CLEAN_VER//[!0-9]/}"
+        [ -z "${VER_NUM}" ] && VER_NUM="1"
+
+        if [ "${ENABLE_KSU}" -eq 1 ]; then
+            sed -i "s/kernel\.string=.*/kernel.string=Cybertron Kernel ${CLEAN_VER} (KernelSU) by cool585/g" anykernel.sh
+            sed -i "s/^version=.*/version=${CLEAN_VER}-KSU/g" anykernel.sh
+        else
+            sed -i "s/kernel\.string=.*/kernel.string=Cybertron Kernel ${CLEAN_VER} by cool585/g" anykernel.sh
+            sed -i "s/^version=.*/version=${CLEAN_VER}/g" anykernel.sh
+        fi
+        sed -i "s/^versionCode=.*/versionCode=${VER_NUM}/g" anykernel.sh
     fi
 
     # Create flashable zip
@@ -385,6 +515,8 @@ if [ -d "${ZIP_DIR}" ]; then
 
     # Create convenient copy aliases
     cp -f "${ZIP_NAME}" "${BUILD_DIR}/${ZIP_NAME}"
+    cp -f "${ZIP_NAME}" "${ZIP_DIR}/${ZIP_ALIAS}"
+    cp -f "${ZIP_NAME}" "${BUILD_DIR}/${ZIP_ALIAS}"
     cp -f "${ZIP_NAME}" "${ZIP_DIR}/${DEVICE}.zip"
     cp -f "${ZIP_NAME}" "${BUILD_DIR}/${DEVICE}.zip"
 
