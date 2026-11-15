@@ -50,7 +50,18 @@ jobs:
       - name: Determine Target Devices & Branch
         id: set-matrix
         run: |
-          INPUT_DEVICE="${{ github.event.inputs.device || inputs.device || 'both' }}"
+          INPUT_DEVICE="${{ github.event.inputs.device || inputs.device || '' }}"
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          if [ -z "$INPUT_DEVICE" ]; then
+            if [[ "${COMMIT_MSG,,}" == *"[liber]"* ]] || ([[ "${COMMIT_MSG,,}" == *"liber"* ]] && [[ "${COMMIT_MSG,,}" != *"hanoip"* ]]); then
+              INPUT_DEVICE="liber"
+            elif [[ "${COMMIT_MSG,,}" == *"[hanoip]"* ]] || ([[ "${COMMIT_MSG,,}" == *"hanoip"* ]] && [[ "${COMMIT_MSG,,}" != *"liber"* ]]); then
+              INPUT_DEVICE="hanoip"
+            else
+              INPUT_DEVICE="both"
+            fi
+          fi
+
           if [ "$INPUT_DEVICE" = "both" ]; then
             echo 'devices=["liber", "hanoip"]' >> $GITHUB_OUTPUT
           else

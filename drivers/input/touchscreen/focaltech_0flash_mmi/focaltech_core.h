@@ -298,9 +298,12 @@ void fts_gesture_recovery(struct fts_ts_data *ts_data);
 int fts_gesture_readdata(struct fts_ts_data *ts_data, u8 *data);
 int fts_gesture_suspend(struct fts_ts_data *ts_data);
 int fts_gesture_resume(struct fts_ts_data *ts_data);
+int fts_gesture_is_enabled(void);
 void fts_gesture_report(struct input_dev *input_dev, int gesture_id);
 bool detect_doubletap2wake(int x, int y, int flag);
 void doubletap2wake_reset(void);
+#else
+static inline int fts_gesture_is_enabled(void) { return 0; }
 #endif
 
 /* Apk and functions */
