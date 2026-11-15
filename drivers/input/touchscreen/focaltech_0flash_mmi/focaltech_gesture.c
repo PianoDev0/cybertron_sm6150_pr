@@ -178,9 +178,19 @@ static ssize_t fts_gesture_store(
     if (FTS_SYSFS_ECHO_ON(buf)) {
         FTS_DEBUG("enable gesture");
         fts_gesture_data.mode = ENABLE;
+#ifdef FOCALTECH_SENSOR_EN
+        mutex_lock(&fts_data->state_mutex);
+        fts_data->should_enable_gesture = true;
+        mutex_unlock(&fts_data->state_mutex);
+#endif
     } else if (FTS_SYSFS_ECHO_OFF(buf)) {
         FTS_DEBUG("disable gesture");
         fts_gesture_data.mode = DISABLE;
+#ifdef FOCALTECH_SENSOR_EN
+        mutex_lock(&fts_data->state_mutex);
+        fts_data->should_enable_gesture = false;
+        mutex_unlock(&fts_data->state_mutex);
+#endif
     }
     mutex_unlock(&input_dev->mutex);
 
@@ -358,8 +368,10 @@ static int fts_sensor_set_enable(struct sensors_classdev *sensors_cdev,
     mutex_lock(&fts_data->state_mutex);
     if (enable == 1) {
         fts_data->should_enable_gesture = true;
+        fts_gesture_data.mode = ENABLE;
     } else if (enable == 0) {
         fts_data->should_enable_gesture = false;
+        fts_gesture_data.mode = DISABLE;
     } else {
         FTS_INFO("unknown enable symbol\n");
     }
@@ -712,6 +724,11 @@ int fts_gesture_resume(struct fts_ts_data *ts_data)
     return 0;
 }
 
+int fts_gesture_is_enabled(void)
+{
+    return (fts_gesture_data.mode == ENABLE);
+}
+
 int fts_gesture_init(struct fts_ts_data *ts_data)
 {
     struct input_dev *input_dev = ts_data->input_dev;
@@ -766,7 +783,7 @@ int fts_gesture_init(struct fts_ts_data *ts_data)
     fts_create_gesture_sysfs(ts_data->dev);
 
     memset(&fts_gesture_data, 0, sizeof(struct fts_gesture_st));
-    fts_gesture_data.mode = ENABLE;
+    fts_gesture_data.mode = DISABLE;
     fts_gesture_data.active = DISABLE;
 
     FTS_FUNC_EXIT();

@@ -621,7 +621,7 @@ static int fts_read_touchdata(struct fts_ts_data *data)
 #endif
     if ((buf[1] & 0xF0) != 0x90) {
 #if FTS_GESTURE_EN
-        if (data->suspended && data->should_enable_gesture && !data->palm_detection_enabled) {
+        if (data->suspended && data->should_enable_gesture && fts_gesture_is_enabled() && !data->palm_detection_enabled) {
             ret = fts_gesture_readdata(data, NULL);
             if (0 == ret) {
                 pr_info("[FTS_TS] success to get gesture data in irq handler\n");
@@ -763,7 +763,7 @@ static int fts_read_parse_touchdata(struct fts_ts_data *data)
 
     if (data->touch_point == 0) {
 #if FTS_GESTURE_EN
-        if (data->suspended && data->should_enable_gesture && !data->palm_detection_enabled) {
+        if (data->suspended && data->should_enable_gesture && fts_gesture_is_enabled() && !data->palm_detection_enabled) {
             detect_doubletap2wake(0, 0, FTS_TOUCH_UP);
         }
 #endif
@@ -854,7 +854,7 @@ static void fts_irq_read_report(void)
 #endif
             mutex_unlock(&ts_data->report_mutex);
 #if FTS_GESTURE_EN
-        } else if (ts_data->should_enable_gesture && !ts_data->palm_detection_enabled) {
+        } else if (ts_data->should_enable_gesture && fts_gesture_is_enabled() && !ts_data->palm_detection_enabled) {
             if (ts_data->touch_point == 1 && ts_data->point_num <= 1) {
                 if (detect_doubletap2wake(ts_data->events[0].x, ts_data->events[0].y, ts_data->events[0].flag)) {
                     pr_info("[FTS_TS] Software DT2W triggered at (%d, %d), reporting KEY_WAKEUP\n",
@@ -1652,7 +1652,7 @@ int drm_notifier_callback(struct notifier_block *self,
             }
 #endif
 #ifdef FOCALTECH_SENSOR_EN
-            if (fts_data->should_enable_gesture) {
+            if (fts_data->should_enable_gesture && fts_gesture_is_enabled()) {
                 pr_info("[FTS_TS] double tap gesture suspend\n");
                 touch_set_state(0, TOUCH_PANEL_IDX_PRIMARY);
                 return 1;
@@ -1844,6 +1844,7 @@ static int fts_ts_probe_entry(struct fts_ts_data *ts_data)
     mutex_init(&ts_data->state_mutex);
     //unknown screen state
     ts_data->screen_state = SCREEN_UNKNOWN;
+    ts_data->should_enable_gesture = false;
 #endif
 
     /* Init communication interface */
@@ -2164,7 +2165,7 @@ static int _fts_ts_suspend(struct device *dev)
 
 #if FTS_GESTURE_EN
 #ifdef FOCALTECH_SENSOR_EN
-    if (ts_data->should_enable_gesture) {
+    if (ts_data->should_enable_gesture && fts_gesture_is_enabled()) {
 #endif
         if (fts_gesture_suspend(ts_data) == 0) {
             /* Enter into gesture mode(suspend) */
