@@ -2,7 +2,7 @@
 #
 # Cybertron Kernel Build Script (cyber.sh)
 # Targets: Motorola SM6150 (Moto G40/G60 [hanoip] / Motorola One Fusion+ [liber])
-# Base: Linux 4.14.357-openela (Cybertron Kernel v19 - ccache accelerated)
+# Base: Linux 4.14.357-openela (Cybertron Kernel v20 - ccache accelerated)
 # Maintainer: cool585 (DhineshCool)
 #
 
@@ -134,9 +134,9 @@ elif [[ "${CLEAN_VER,,}" == *ksu ]] && [ "${#CLEAN_VER}" -gt 3 ]; then
     CLEAN_VER="${CLEAN_VER%[kK][sS][uU]}"
 fi
 
-# Fallback to v19 if branch is detached or empty
+# Fallback to v20 if branch is detached or empty
 if [ -z "${CLEAN_VER}" ] || [ "${CLEAN_VER}" = "HEAD" ]; then
-    CLEAN_VER="v19"
+    CLEAN_VER="v20"
 fi
 
 # Device-Specific Configurations
