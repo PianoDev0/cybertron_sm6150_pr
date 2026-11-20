@@ -274,16 +274,66 @@ int ili_gesture_recovery(void)
 	return ret;
 }
 
-void ili_spi_recovery(void)
+static int ili_touch_recover(void)
 {
+	int ret;
+
+	ili_touch_release_all_point();
 	atomic_set(&ilits->esd_stat, START);
 
 	ILI_INFO("Doing spi recovery\n");
-	if (ili_fw_upgrade_handler(NULL) < 0)
+	ret = ili_fw_upgrade_handler(NULL);
+	if (ret < 0)
 		ILI_ERR("FW upgrade failed\n");
 
 	atomic_set(&ilits->esd_stat, END);
+	return ret;
 }
+
+void ili_spi_recovery(void)
+{
+	ili_touch_recover();
+}
+
+static ssize_t baseline_reset_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	int value, ret;
+
+	ret = kstrtoint(buf, 0, &value);
+	if (ret)
+		return ret;
+	if (value != 1)
+		return -EINVAL;
+	ret = mutex_lock_interruptible(&ilits->touch_mutex);
+	if (ret)
+		return ret;
+	if (!ilits->boot || !ilits->input || ilits->tp_suspend ||
+	    ilits->pm_suspend || !ilits->report ||
+	    ilits->actual_tp_mode != P5_X_FW_AP_MODE ||
+	    atomic_read(&ilits->fw_stat) || atomic_read(&ilits->tp_reset) ||
+	    atomic_read(&ilits->mp_stat) || atomic_read(&ilits->tp_sleep) ||
+	    atomic_read(&ilits->tp_sw_mode) || atomic_read(&ilits->esd_stat)) {
+		ret = -EBUSY;
+		goto unlock;
+	}
+	ret = ili_touch_recover();
+unlock:
+	mutex_unlock(&ilits->touch_mutex);
+	if (ret < 0)
+		return ret;
+	return count;
+}
+static DEVICE_ATTR_WO(baseline_reset);
+
+static struct attribute *ili_recovery_attrs[] = {
+	&dev_attr_baseline_reset.attr,
+	NULL,
+};
+
+static const struct attribute_group ili_recovery_group = {
+	.attrs = ili_recovery_attrs,
+};
 
 int ili_wq_esd_spi_check(void)
 {
@@ -759,18 +809,19 @@ int ili_report_handler(void)
 	u8  checksum = 0, pack_checksum = 0;
 	u8 *trdata = NULL;
 	int rlen = 0;
-	int tmp = debug_en;
 
 	/* Just in case these stats couldn't be blocked in top half context */
 	if (!ilits->report || atomic_read(&ilits->tp_reset) ||
 		atomic_read(&ilits->fw_stat) || atomic_read(&ilits->tp_sw_mode) ||
 		atomic_read(&ilits->mp_stat) || atomic_read(&ilits->tp_sleep)) {
 		ILI_INFO("ignore report request\n");
+		ili_touch_release_all_point();
 		return -EINVAL;
 	}
 
 	if (ilits->irq_after_recovery) {
 		ILI_INFO("ignore int triggered by recovery\n");
+		ili_touch_release_all_point();
 		return -EINVAL;
 	}
 
@@ -785,6 +836,8 @@ int ili_report_handler(void)
 			ret = wait_for_completion_timeout(&ilits->pm_completion, msecs_to_jiffies(700));
 			if (!ret) {
 				ILI_ERR("system(spi) can't finished resuming procedure.");
+				ret = -ETIMEDOUT;
+				goto bad_packet;
 			}
 		}
 	}
@@ -792,24 +845,18 @@ int ili_report_handler(void)
 	rlen = ilits->tp_data_len;
 	ILI_DBG("Packget length = %d\n", rlen);
 
-	if (!rlen || rlen > TR_BUF_SIZE) {
-		ILI_ERR("Length of packet is invaild\n");
-		goto out;
+	if (rlen < 2 || rlen > TR_BUF_SIZE) {
+		pr_err_ratelimited("ilitek: invalid report length\n");
+		ret = -EINVAL;
+		goto bad_packet;
 	}
 
 	memset(ilits->tr_buf, 0x0, TR_BUF_SIZE);
 
 	ret = ilits->wrapper(NULL, 0, ilits->tr_buf, rlen, OFF, OFF);
 
-#if PROXIMITY_BY_FW
-	if (ilits->tr_buf[0] == P5_X_DEMO_PROXUMITY_ID) {
-		ili_report_proximity_mode(ilits->tr_buf, 1);
-		goto out;
-	}
-#endif
-
 	if (ret < 0) {
-		ILI_ERR("Read report packet failed, ret = %d\n", ret);
+		pr_err_ratelimited("ilitek: report read failed: %d\n", ret);
 		if (ret == DO_SPI_RECOVER) {
 			ilits->irq_after_recovery = true;
 			ili_ic_get_pc_counter(DO_SPI_RECOVER);
@@ -823,9 +870,18 @@ int ili_report_handler(void)
 			}
 			msleep(100);
 			ilits->irq_after_recovery = false;
+			goto out;
 		}
+		goto bad_packet;
+	}
+
+#if PROXIMITY_BY_FW
+	if (ilits->tr_buf[0] == P5_X_DEMO_PROXUMITY_ID) {
+		ili_touch_release_all_point();
+		ili_report_proximity_mode(ilits->tr_buf, 1);
 		goto out;
 	}
+#endif
 
 	ili_dump_data(ilits->tr_buf, 8, rlen, 0, "finger report");
 
@@ -836,24 +892,35 @@ int ili_report_handler(void)
 	ILI_DBG("Packet ID = %x\n", pid);
 
 	if (checksum != pack_checksum && pid != P5_X_I2CUART_PACKET_ID) {
-		ILI_ERR("Checksum Error (0x%X)! Pack = 0x%X, len = %d\n", checksum, pack_checksum, rlen);
-		debug_en = DEBUG_ALL;
-		ili_dump_data(trdata, 8, rlen, 0, "finger report with wrong");
-		debug_en = tmp;
+		pr_err_ratelimited("ilitek: checksum mismatch: %02x/%02x, len=%d\n",
+			checksum, pack_checksum, rlen);
 		ret = -EINVAL;
-		goto out;
+		goto bad_packet;
 	}
 
 	if (pid == P5_X_INFO_HEADER_PACKET_ID) {
+		if (rlen < P5_X_INFO_HEADER_LENGTH + 2) {
+			ret = -EINVAL;
+			goto bad_packet;
+		}
 		trdata = ilits->tr_buf + P5_X_INFO_HEADER_LENGTH;
+		rlen -= P5_X_INFO_HEADER_LENGTH;
 		pid = trdata[0];
 	}
 
 	switch (pid) {
 	case P5_X_DEMO_PACKET_ID:
+		if (rlen < P5_X_DEMO_MODE_PACKET_LEN) {
+			ret = -EINVAL;
+			goto bad_packet;
+		}
 		ili_report_ap_mode(trdata, rlen);
 		break;
 	case P5_X_DEBUG_PACKET_ID:
+		if (rlen < 5 + 3 * MAX_TOUCH_NUM) {
+			ret = -EINVAL;
+			goto bad_packet;
+		}
 		ili_report_debug_mode(trdata, rlen);
 		break;
 #if AXIS_PACKET
@@ -865,22 +932,48 @@ int ili_report_handler(void)
 		break;
 #endif
 	case P5_X_DEBUG_LITE_PACKET_ID:
+		if (rlen < 4 + 3 * MAX_TOUCH_NUM) {
+			ret = -EINVAL;
+			goto bad_packet;
+		}
 		ili_report_debug_lite_mode(trdata, rlen);
 		break;
 	case P5_X_I2CUART_PACKET_ID:
+		if (rlen < 5) {
+			ret = -EINVAL;
+			goto bad_packet;
+		}
 		ili_report_i2cuart_mode(trdata, rlen);
 		break;
 	case P5_X_GESTURE_PACKET_ID:
+		if (rlen < P5_X_GESTURE_NORMAL_LENGTH ||
+		    rlen > P5_X_GESTURE_INFO_LENGTH ||
+		    (ilits->gesture_mode == DATA_FORMAT_GESTURE_INFO &&
+		     rlen < P5_X_GESTURE_INFO_LENGTH)) {
+			ret = -EINVAL;
+			goto bad_packet;
+		}
 		ili_report_gesture_mode(trdata, rlen);
 		break;
 	case P5_X_GESTURE_FAIL_ID:
 		ILI_INFO("gesture fail reason code = 0x%02x", trdata[1]);
 		break;
 	case P5_X_DEMO_DEBUG_INFO_PACKET_ID:
+		if (rlen < P5_X_DEMO_MODE_PACKET_LEN +
+		    P5_X_DEMO_DEBUG_INFO_ID0_LENGTH + P5_X_INFO_HEADER_LENGTH ||
+		    trdata[P5_X_DEMO_MODE_PACKET_LEN + 1] >=
+			ARRAY_SIZE(ilits->demo_debug_info) ||
+		    !ilits->demo_debug_info[trdata[P5_X_DEMO_MODE_PACKET_LEN + 1]] ||
+		    !trdata[P5_X_DEMO_MODE_PACKET_LEN] ||
+		    trdata[P5_X_DEMO_MODE_PACKET_LEN] >
+			rlen - P5_X_DEMO_MODE_PACKET_LEN - 1) {
+			ret = -EINVAL;
+			goto bad_packet;
+		}
 		ili_demo_debug_info_mode(trdata, rlen);
 		break;
 	default:
-		ILI_ERR("Unknown packet id, %x\n", pid);
+		pr_err_ratelimited("ilitek: unknown report ID: %02x\n", pid);
 #if ( TDDI_INTERFACE == BUS_I2C )
 		msleep(50);
 		ili_ic_get_pc_counter(DO_I2C_RECOVER);
@@ -895,8 +988,14 @@ int ili_report_handler(void)
 			ILI_ERR("I2C gesture_symbol\n");
 		}
 #endif
-		break;
+		ret = -EINVAL;
+		goto bad_packet;
 	}
+
+	goto out;
+bad_packet:
+	/* A bad frame must not leave the preceding Type B contacts pressed. */
+	ili_touch_release_all_point();
 
 out:
 	if (ilits->actual_tp_mode != P5_X_FW_GESTURE_MODE) {
@@ -1065,6 +1164,7 @@ static void ili_update_tp_module_info(void)
 
 int ili_tddi_init(void)
 {
+	int ret;
 #if (BOOT_FW_UPDATE | HOST_DOWN_LOAD)
 	struct task_struct *fw_boot_th;
 #endif
@@ -1160,6 +1260,10 @@ int ili_tddi_init(void)
 
 	ili_ic_edge_palm_para_init();
 
+	ret = devm_device_add_group(ilits->dev, &ili_recovery_group);
+	if (ret)
+		ILI_ERR("Failed to create baseline_reset: %d\n", ret);
+
 	return 0;
 }
 
@@ -1169,6 +1273,8 @@ void ili_dev_remove(bool flag)
 
 	if (!ilits)
 		return;
+
+	devm_device_remove_group(ilits->dev, &ili_recovery_group);
 
 	gpio_free(ilits->tp_int);
 	gpio_free(ilits->tp_rst);

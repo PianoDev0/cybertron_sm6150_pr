@@ -774,7 +774,7 @@ fail:
 
 void ili_demo_debug_info_id0(u8 *buf, size_t len)
 {
-	struct ili_demo_debug_info_id0 id0;
+	struct ili_demo_debug_info_id0 id0 = {0};
 
 	ipio_memcpy(&id0, buf, sizeof(id0), len);
 	ILI_INFO("id0 len = %d,strucy len = %d", (int)len, (int)sizeof(id0));
@@ -824,14 +824,23 @@ void ili_demo_debug_info_mode(u8 *buf, size_t len)
 	u8 *info_ptr;
 	u8 info_id, info_len;
 
-	ili_report_ap_mode(buf, P5_X_DEMO_MODE_PACKET_LEN);
+	if (len < P5_X_DEMO_MODE_PACKET_LEN + 2)
+		goto invalid_packet;
 	info_ptr = buf + P5_X_DEMO_MODE_PACKET_LEN;
 	info_len = info_ptr[0];
 	info_id = info_ptr[1];
 
+	if (info_id >= ARRAY_SIZE(ilits->demo_debug_info) ||
+	    !ilits->demo_debug_info[info_id] || !info_len ||
+	    info_len > len - P5_X_DEMO_MODE_PACKET_LEN - 1)
+		goto invalid_packet;
+	ili_report_ap_mode(buf, P5_X_DEMO_MODE_PACKET_LEN);
 	ILI_INFO("info len = %d ,id = %d\n", info_len, info_id);
 
 	ilits->demo_debug_info[info_id](&info_ptr[1] , info_len);
+	return;
+invalid_packet:
+	ili_touch_release_all_point();
 }
 
 static void ilitek_tddi_touch_send_debug_data(u8 *buf, int len)
@@ -916,6 +925,9 @@ void ili_touch_release_all_point(void)
 {
 	int i;
 
+	if (!ilits->input)
+		return;
+
 	if (MT_B_TYPE) {
 		for (i = 0 ; i < MAX_TOUCH_NUM; i++)
 			ili_touch_release(0, 0, i);
@@ -926,6 +938,25 @@ void ili_touch_release_all_point(void)
 		ili_touch_release(0, 0, 0);
 	}
 	input_sync(ilits->input);
+	memset(ilits->curt_touch, 0, sizeof(ilits->curt_touch));
+	memset(ilits->prev_touch, 0, sizeof(ilits->prev_touch));
+	ilits->finger = 0;
+	ilits->last_touch = 0;
+}
+
+static bool ili_touch_point_valid(u32 raw_x, u32 raw_y, u16 pressure)
+{
+	if (!ilits->panel_wid || !ilits->panel_hei)
+		return false;
+	if (MT_PRESSURE && !pressure)
+		return false;
+	if (ilits->trans_xy)
+		return raw_x < ilits->panel_wid && raw_y < ilits->panel_hei;
+
+	if ((ilits->max_x && raw_x > ilits->max_x) ||
+	    (ilits->max_y && raw_y > ilits->max_y))
+		return false;
+	return raw_x < TPD_WIDTH && raw_y < TPD_HEIGHT;
 }
 
 static struct ilitek_touch_info touch_info[MAX_TOUCH_NUM];
@@ -938,6 +969,11 @@ void ili_report_ap_mode(u8 *buf, int len)
 	int i = 0;
 	u32 xop = 0, yop = 0;
 
+	if (len < P5_X_DEMO_MODE_PACKET_LEN) {
+		ili_touch_release_all_point();
+		return;
+	}
+	memset(ilits->curt_touch, 0, sizeof(ilits->curt_touch));
 	memset(touch_info, 0x0, sizeof(touch_info));
 
 	ilits->finger = 0;
@@ -956,6 +992,12 @@ void ili_report_ap_mode(u8 *buf, int len)
 
 		xop = (((buf[(4 * i) + 1] & 0xF0) << 4) | (buf[(4 * i) + 2]));
 		yop = (((buf[(4 * i) + 1] & 0x0F) << 8) | (buf[(4 * i) + 3]));
+
+		if (!ili_touch_point_valid(xop, yop, buf[(4 * i) + 4])) {
+			if (MT_B_TYPE)
+				ili_touch_release(0, 0, i);
+			continue;
+		}
 
 		if (ilits->trans_xy) {
 			touch_info[ilits->finger].x = xop;
@@ -1043,6 +1085,11 @@ void ili_debug_mode_report_point(u8 *buf, int len)
 	u16 axis_addr;
 #endif
 
+	if (len < 3 * MAX_TOUCH_NUM) {
+		ili_touch_release_all_point();
+		return;
+	}
+	memset(ilits->curt_touch, 0, sizeof(ilits->curt_touch));
 	memset(touch_info, 0x0, sizeof(touch_info));
 
 	ilits->finger = 0;
@@ -1064,6 +1111,13 @@ void ili_debug_mode_report_point(u8 *buf, int len)
 
 		xop = (((buf[(3 * i)] & 0xF0) << 4) | (buf[(3 * i) + 1]));
 		yop = (((buf[(3 * i)] & 0x0F) << 8) | (buf[(3 * i) + 2]));
+
+		/* Debug packets have no pressure; the driver synthesizes it. */
+		if (!ili_touch_point_valid(xop, yop, 1)) {
+			if (MT_B_TYPE)
+				ili_touch_release(0, 0, i);
+			continue;
+		}
 
 		if (ilits->trans_xy) {
 			touch_info[ilits->finger].x = xop;
@@ -1148,14 +1202,22 @@ void ili_debug_mode_report_point(u8 *buf, int len)
 
 void ili_report_debug_mode(u8 *buf, int len)
 {
-	ili_debug_mode_report_point(buf + 5, len);
+	if (len < 5 + 3 * MAX_TOUCH_NUM) {
+		ili_touch_release_all_point();
+		return;
+	}
+	ili_debug_mode_report_point(buf + 5, len - 5);
 
 	ilitek_tddi_touch_send_debug_data(buf, len);
 }
 
 void ili_report_debug_lite_mode(u8 *buf, int len)
 {
-	ili_debug_mode_report_point(buf + 4, len);
+	if (len < 4 + 3 * MAX_TOUCH_NUM) {
+		ili_touch_release_all_point();
+		return;
+	}
+	ili_debug_mode_report_point(buf + 4, len - 4);
 
 	ilitek_tddi_touch_send_debug_data(buf, len);
 }
@@ -1206,6 +1268,10 @@ void ili_report_gesture_mode(u8 *buf, int len)
 	static int report_cnt = 0;
 #endif
 
+	if (len < P5_X_GESTURE_NORMAL_LENGTH || len > sizeof(ges)) {
+		ili_touch_release_all_point();
+		return;
+	}
 	for (i = 0; i < len; i++)
 		ges[i] = buf[i];
 
