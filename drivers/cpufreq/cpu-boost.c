@@ -153,13 +153,21 @@ static struct notifier_block boost_adjust_nb = {
 
 static void update_policy_online(void)
 {
-	unsigned int i;
+	struct cpufreq_policy *policy;
+	cpumask_t pending;
+	unsigned int cpu;
 
-	/* Re-evaluate policy to trigger adjust notifier for online CPUs */
 	get_online_cpus();
-	for_each_online_cpu(i) {
-		pr_debug("Updating policy for CPU%d\n", i);
-		cpufreq_update_policy(i);
+	cpumask_copy(&pending, cpu_online_mask);
+	while (!cpumask_empty(&pending)) {
+		cpu = cpumask_first(&pending);
+		cpumask_clear_cpu(cpu, &pending);
+		policy = cpufreq_cpu_get(cpu);
+		if (!policy)
+			continue;
+		cpumask_andnot(&pending, &pending, policy->related_cpus);
+		cpufreq_cpu_put(policy);
+		cpufreq_update_policy(cpu);
 	}
 	put_online_cpus();
 }
