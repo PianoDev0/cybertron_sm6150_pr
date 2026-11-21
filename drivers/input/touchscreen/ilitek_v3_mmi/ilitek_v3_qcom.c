@@ -738,32 +738,30 @@ static int ilitek_charger_notifier_callback(struct notifier_block *nb,
 	struct power_supply *psy = NULL;
 	union power_supply_propval prop;
 
-
-	if(ilits->fw_update_stat != 100)
+	if (ilits->fw_update_stat != 100)
 		return 0;
 
-	psy= power_supply_get_by_name("usb");
+	if (val != PSY_EVENT_PROP_CHANGED)
+		return 0;
+
+	psy = power_supply_get_by_name("usb");
 	if (!psy) {
 		ILI_ERR("Couldn't get usbpsy\n");
 		return -EINVAL;
 	}
-	if (!strcmp(psy->desc->name, "usb")) {
-		if (psy && val == POWER_SUPPLY_PROP_STATUS) {
-			ret = power_supply_get_property(psy, POWER_SUPPLY_PROP_PRESENT,&prop);
-			if (ret < 0) {
-				ILI_ERR("Couldn't get POWER_SUPPLY_PROP_ONLINE rc=%d\n", ret);
-				return ret;
-			} else {
-				if(ilits->usb_plug_status == 2)
-					ilits->usb_plug_status = prop.intval;
-				if(ilits->usb_plug_status != prop.intval) {
-					ILI_INFO("usb prop.intval =%d\n", prop.intval);
-					ilits->usb_plug_status = prop.intval;
-					if(!ilits->tp_suspend && (ilits->charger_notify_wq != NULL))
-						queue_work(ilits->charger_notify_wq,&ilits->update_charger);
-				}
-			}
-		}
+
+	ret = power_supply_get_property(psy, POWER_SUPPLY_PROP_PRESENT, &prop);
+	power_supply_put(psy);
+	if (ret < 0) {
+		ILI_ERR("Couldn't get POWER_SUPPLY_PROP_PRESENT rc=%d\n", ret);
+		return ret;
+	}
+
+	if (ilits->usb_plug_status != prop.intval) {
+		ILI_INFO("usb prop.intval =%d\n", prop.intval);
+		ilits->usb_plug_status = prop.intval;
+		if (!ilits->tp_suspend && ilits->charger_notify_wq != NULL)
+			queue_work(ilits->charger_notify_wq, &ilits->update_charger);
 	}
 	return 0;
 }
@@ -771,9 +769,11 @@ static void ilitek_update_charger(struct work_struct *work)
 {
 	int ret = 0;
 	mutex_lock(&ilits->touch_mutex);
-	ret = ili_ic_func_ctrl("plug", !ilits->usb_plug_status);// plug in
-	if(ret<0) {
-		ILI_ERR("Write plug in failed\n");
+	if (!ilits->tp_suspend) {
+		ili_touch_release_all_point();
+		ret = ili_ic_func_ctrl("plug", !ilits->usb_plug_status);
+		if (ret < 0)
+			ILI_ERR("Write plug state (%d) failed\n", ilits->usb_plug_status);
 	}
 	mutex_unlock(&ilits->touch_mutex);
 }

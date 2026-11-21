@@ -648,11 +648,10 @@ int ili_fw_upgrade_handler(void *data)
 #if CHARGER_NOTIFIER_CALLBACK
 #if KERNEL_VERSION(4, 1, 0) <= LINUX_VERSION_CODE
 		/* add_for_charger_start */
-		if((ilits->usb_plug_status)&&(ilits->actual_tp_mode !=P5_X_FW_TEST_MODE)) {
-			ret = ili_ic_func_ctrl("plug", !ilits->usb_plug_status);// plug in
-			if(ret<0) {
+		if (ilits->usb_plug_status == 1 && ilits->actual_tp_mode != P5_X_FW_TEST_MODE) {
+			ret = ili_ic_func_ctrl("plug", DISABLE); /* plug in */
+			if (ret < 0)
 				ILI_ERR("Write plug in failed\n");
-			}
 		}
 		/*  add_for_charger_end  */
 #endif
@@ -996,6 +995,31 @@ int ili_report_handler(void)
 bad_packet:
 	/* A bad frame must not leave the preceding Type B contacts pressed. */
 	ili_touch_release_all_point();
+	if (!ilits->tp_suspend && ilits->actual_tp_mode != P5_X_FW_GESTURE_MODE) {
+		static unsigned long bad_window_start;
+		static unsigned long last_auto_recover;
+		static unsigned int bad_pkt_count;
+		unsigned long now = jiffies;
+
+		if (!bad_window_start || time_after(now, bad_window_start + 10 * HZ)) {
+			bad_window_start = now;
+			bad_pkt_count = 1;
+		} else {
+			bad_pkt_count++;
+		}
+
+		if (bad_pkt_count >= 3 &&
+		    (!last_auto_recover || time_after(now, last_auto_recover + 5 * HZ))) {
+			bad_pkt_count = 0;
+			bad_window_start = 0;
+			last_auto_recover = now;
+			ILI_ERR("Repeated bad packets detected, triggering baseline recovery\n");
+			ilits->irq_after_recovery = true;
+			ili_touch_recover();
+			msleep(100);
+			ilits->irq_after_recovery = false;
+		}
+	}
 
 out:
 	if (ilits->actual_tp_mode != P5_X_FW_GESTURE_MODE) {
