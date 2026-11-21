@@ -388,11 +388,15 @@ static int tz_get_target_freq(struct devfreq *devfreq, unsigned long *freq)
 		else
 			scm_data[2] = priv->bin.busy_time;
 		scm_data[3] = context_count;
-		__secure_tz_update_entry3(scm_data, sizeof(scm_data),
+		result = __secure_tz_update_entry3(scm_data, sizeof(scm_data),
 					&val, sizeof(val), priv);
 	}
 	priv->bin.total_time = 0;
 	priv->bin.busy_time = 0;
+
+	/* On SCM failure the 64-bit response does not contain a delta. */
+	if (priv->is_64 && result)
+		return 0;
 
 	/*
 	 * If the decision is to move to a different level, make sure the GPU
