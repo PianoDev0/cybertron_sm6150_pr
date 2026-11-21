@@ -290,6 +290,26 @@ static int ili_touch_recover(void)
 	return ret;
 }
 
+static void ili_touch_recover_work(struct work_struct *work)
+{
+	mutex_lock(&ilits->touch_mutex);
+	if (!ilits->boot || ilits->tp_suspend || ilits->pm_suspend ||
+	    !ilits->report || ilits->actual_tp_mode != P5_X_FW_AP_MODE ||
+	    atomic_read(&ilits->tp_reset) || atomic_read(&ilits->mp_stat) ||
+	    atomic_read(&ilits->tp_sleep) || atomic_read(&ilits->tp_sw_mode) ||
+	    atomic_read(&ilits->fw_stat))
+		goto out;
+
+	ili_irq_disable();
+	ili_touch_recover();
+	if (!ilits->tp_suspend && !ilits->pm_suspend && ilits->report)
+		ili_irq_enable();
+out:
+	mutex_unlock(&ilits->touch_mutex);
+}
+
+static DECLARE_WORK(ili_touch_recover_work_item, ili_touch_recover_work);
+
 void ili_spi_recovery(void)
 {
 	ili_touch_recover();
@@ -993,8 +1013,7 @@ int ili_report_handler(void)
 
 	goto out;
 bad_packet:
-	/* A bad frame must not leave the preceding Type B contacts pressed. */
-	ili_touch_release_all_point();
+	/* Keep active contacts across isolated corrupt frames. */
 	if (!ilits->tp_suspend && ilits->actual_tp_mode != P5_X_FW_GESTURE_MODE) {
 		static unsigned long bad_window_start;
 		static unsigned long last_auto_recover;
@@ -1013,11 +1032,8 @@ bad_packet:
 			bad_pkt_count = 0;
 			bad_window_start = 0;
 			last_auto_recover = now;
-			ILI_ERR("Repeated bad packets detected, triggering baseline recovery\n");
-			ilits->irq_after_recovery = true;
-			ili_touch_recover();
-			msleep(100);
-			ilits->irq_after_recovery = false;
+			ILI_ERR("Repeated bad packets detected, scheduling baseline recovery\n");
+			queue_work(system_wq, &ili_touch_recover_work_item);
 		}
 	}
 
