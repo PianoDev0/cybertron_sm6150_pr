@@ -470,11 +470,12 @@ if [ -d "${ZIP_DIR}" ]; then
     rm -f *.zip Image.gz dtb *.dtb Image
     rm -rf modules
 
-    # Copy Kernel Image
+    # Copy Kernel Image (prefer raw uncompressed Image for bootloader compatibility)
     if [ -f "${BUILD_DIR}/Image" ]; then
         cp -f "${BUILD_DIR}/Image" "${ZIP_DIR}/Image"
+    elif [ -f "${BUILD_DIR}/Image.gz" ]; then
+        cp -f "${BUILD_DIR}/Image.gz" "${ZIP_DIR}/Image.gz"
     fi
-    cp -f "${BUILD_DIR}/Image.gz" "${ZIP_DIR}/Image.gz"
 
     # Concatenate or copy DTBs if device requires them (e.g. liber)
     DTB_DIR="${OUT_DIR}/arch/arm64/boot/dts/qcom"
