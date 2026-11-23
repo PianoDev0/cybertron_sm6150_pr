@@ -226,7 +226,8 @@ if [ ! -f "${REQ_FILE}" ]; then
 fi
 
 # Create needed directories
-mkdir -p "${OUT_DIR}" "${BUILD_DIR}" "${HOME}/toolchains"
+mkdir -p "${OUT_DIR}" "${BUILD_DIR}"
+mkdir -p "${HOME}/toolchains" 2>/dev/null || true
 
 # Dynamically locate Toolchains Root
 if [ -d "${PARENT_DIR}/toolchains/neutron-clang" ]; then
@@ -279,7 +280,7 @@ BUILD_CROSS_COMPILE="${GCC_DIR}/bin/aarch64-none-linux-gnu-"
 # Using an executable wrapper script ensures CC and HOSTCC are single valid binary paths,
 # preventing Kbuild scripts (which $(CC), cc-can-link) from breaking on multi-word strings.
 if command -v ccache &>/dev/null; then
-    CCACHE_BIN_DIR="${HOME}/.ccache_bin"
+    CCACHE_BIN_DIR="${OUT_DIR}/.ccache_bin"
     mkdir -p "${CCACHE_BIN_DIR}"
     cat << 'EOF' > "${CCACHE_BIN_DIR}/clang"
 #!/usr/bin/env bash
@@ -291,7 +292,11 @@ exec ccache "${NEUTRON_PATH}/clang++" "$@"
 EOF
     chmod +x "${CCACHE_BIN_DIR}/clang" "${CCACHE_BIN_DIR}/clang++"
 
-    export CCACHE_DIR="${HOME}/.ccache"
+    if [ -w "${HOME}/.ccache" ] || ([ ! -e "${HOME}/.ccache" ] && [ -w "${HOME}" ]); then
+        export CCACHE_DIR="${HOME}/.ccache"
+    else
+        export CCACHE_DIR="/tmp/.ccache"
+    fi
     export CCACHE_MAXSIZE="2G"
     export CCACHE_COMPRESS=1
     export CCACHE_COMPRESSLEVEL=6
@@ -454,6 +459,9 @@ if [ -d "${ZIP_DIR}" ]; then
     rm -rf modules
 
     # Copy Kernel Image
+    if [ -f "${BUILD_DIR}/Image" ]; then
+        cp -f "${BUILD_DIR}/Image" "${ZIP_DIR}/Image"
+    fi
     cp -f "${BUILD_DIR}/Image.gz" "${ZIP_DIR}/Image.gz"
 
     # Concatenate or copy DTBs if device requires them (e.g. liber)
