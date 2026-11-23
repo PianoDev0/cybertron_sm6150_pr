@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 #
 # Cybertron Kernel Build Script (cyber.sh)
-# Targets: Motorola SM6150 (Moto G40/G60 [hanoip] / Motorola One Fusion+ [liber] / Moto G9 Plus [odessa])
+# Targets: Motorola SM6150
+#   - Motorola One Fusion+ [liber]
+#   - Motorola Moto G40/G60 [hanoip]
+#   - Motorola Moto G9 Plus [odessa]
 # Base: Linux 4.14.357-openela (Cybertron Kernel v20 - ccache accelerated)
 # Maintainer: cool585 (DhineshCool)
 #
@@ -18,7 +21,6 @@ BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 # Dynamically determine Script and Kernel Root Directories
-# Resolves physical path even across symlinks and independent clones
 SCRIPT_SOURCE="${BASH_SOURCE[0]}"
 while [ -h "${SCRIPT_SOURCE}" ]; do
     SCRIPT_DIR="$(cd -P "$(dirname "${SCRIPT_SOURCE}")" && pwd)"
@@ -33,7 +35,6 @@ if [ -f "${SCRIPT_DIR}/Makefile" ] && [ -f "${SCRIPT_DIR}/Kconfig" ]; then
 elif [ -f "$(pwd)/Makefile" ] && [ -f "$(pwd)/Kconfig" ]; then
     KERNEL_ROOT="$(pwd)"
 else
-    # Walk upwards to locate kernel tree
     SEARCH_DIR="${SCRIPT_DIR}"
     while [ "${SEARCH_DIR}" != "/" ] && [ -n "${SEARCH_DIR}" ]; do
         if [ -f "${SEARCH_DIR}/Makefile" ] && [ -f "${SEARCH_DIR}/Kconfig" ]; then
@@ -52,7 +53,7 @@ if [ ! -f "${KERNEL_ROOT}/Makefile" ] || [ ! -f "${KERNEL_ROOT}/Kconfig" ]; then
 fi
 
 # Default Build Variables
-DEVICE="liber"
+TARGET_DEVICES=()
 CLEAN_BUILD=0
 MENUCONFIG=0
 UPDATE_TC=0
@@ -60,43 +61,65 @@ ENABLE_KSU=${ENABLE_KSU:-0}
 
 # Parse Command-Line Arguments
 show_help() {
-    echo -e "${BOLD}Usage:${NC} $0 [DEVICE] [OPTIONS]"
+    echo -e "${BOLD}Usage:${NC} $0 [DEVICE...] [OPTIONS]"
     echo ""
-    echo -e "${BOLD}Devices:${NC}"
+    echo -e "${BOLD}Supported Devices:${NC}"
     echo "  liber     - Motorola One Fusion+ (vendor/liber_defconfig) [default]"
     echo "  hanoip    - Motorola Moto G40/G60 (vendor/hanoip_defconfig)"
     echo "  odessa    - Motorola Moto G9 Plus (vendor/odessa_defconfig)"
+    echo "  all       - Build all 3 devices sequentially (liber, hanoip, odessa)"
     echo ""
     echo -e "${BOLD}Options:${NC}"
-    echo "  -d, --device <dev>      Target device (liber, hanoip, odessa)"
+    echo "  -d, --device <dev>      Target device(s) (comma-separated or repeated)"
     echo "  -c, --clean             Clean out directory before building"
     echo "  -k, --ksu               Build kernel with KernelSU (manipvlator/KernelSU)"
-    echo "  -m, --menuconfig        Launch kernel menuconfig interface"
+    echo "  -m, --menuconfig        Launch kernel menuconfig interface (single-device only)"
     echo "  -u, --update-toolchain  Update Neutron-Clang toolchain via antman"
     echo "  -h, --help              Show this help message"
     echo ""
     echo -e "${BOLD}Examples:${NC}"
     echo "  $0 liber"
     echo "  $0 hanoip --clean"
-    echo "  $0 odessa"
     echo "  $0 odessa --ksu"
-    echo "  $0 liber --ksu"
-    echo "  $0 liber -m"
+    echo "  $0 all"
+    echo "  $0 liber hanoip"
+    echo "  $0 -d liber,odessa -k"
     exit 0
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         liber|hanoip|odessa)
-            DEVICE="$1"
+            TARGET_DEVICES+=("$1")
+            shift
+            ;;
+        all|both)
+            TARGET_DEVICES=("liber" "hanoip" "odessa")
             shift
             ;;
         -d|--device)
-            DEVICE="$2"
+            IFS=',' read -ra DEVS <<< "$2"
+            for d in "${DEVS[@]}"; do
+                d_trim="$(echo "${d}" | xargs)"
+                if [ "${d_trim}" = "all" ] || [ "${d_trim}" = "both" ]; then
+                    TARGET_DEVICES=("liber" "hanoip" "odessa")
+                elif [ -n "${d_trim}" ]; then
+                    TARGET_DEVICES+=("${d_trim}")
+                fi
+            done
             shift 2
             ;;
         -d=*|--device=*)
-            DEVICE="${1#*=}"
+            RAW_DEVS="${1#*=}"
+            IFS=',' read -ra DEVS <<< "${RAW_DEVS}"
+            for d in "${DEVS[@]}"; do
+                d_trim="$(echo "${d}" | xargs)"
+                if [ "${d_trim}" = "all" ] || [ "${d_trim}" = "both" ]; then
+                    TARGET_DEVICES=("liber" "hanoip" "odessa")
+                elif [ -n "${d_trim}" ]; then
+                    TARGET_DEVICES+=("${d_trim}")
+                fi
+            done
             shift
             ;;
         -c|--clean)
@@ -119,11 +142,36 @@ while [[ $# -gt 0 ]]; do
             show_help
             ;;
         *)
-            echo -e "${YELLOW}[WARN]: Unknown argument '$1'. Defaulting to device '$DEVICE'.${NC}"
+            echo -e "${YELLOW}[WARN]: Unknown argument '$1'. Ignored.${NC}"
             shift
             ;;
     esac
 done
+
+# Fallback to liber if no device specified
+if [ "${#TARGET_DEVICES[@]}" -eq 0 ]; then
+    TARGET_DEVICES=("liber")
+fi
+
+# Remove duplicates while preserving order
+UNIQUE_DEVICES=()
+for dev in "${TARGET_DEVICES[@]}"; do
+    skip=0
+    for u in "${UNIQUE_DEVICES[@]}"; do
+        if [ "$u" = "$dev" ]; then
+            skip=1
+            break
+        fi
+    done
+    [ $skip -eq 0 ] && UNIQUE_DEVICES+=("$dev")
+done
+TARGET_DEVICES=("${UNIQUE_DEVICES[@]}")
+
+# Validate single device when menuconfig is requested
+if [ "${MENUCONFIG}" -eq 1 ] && [ "${#TARGET_DEVICES[@]}" -gt 1 ]; then
+    echo -e "${RED}[ERROR]: Menuconfig can only be launched for a single device, not multiple!${NC}"
+    exit 1
+fi
 
 # Detect Target Branch (from environment or git repository)
 DETECTED_BRANCH="${TARGET_BRANCH:-${BRANCH:-${GITHUB_REF_NAME:-}}}"
@@ -151,45 +199,7 @@ if [ -z "${CLEAN_VER}" ] || [ "${CLEAN_VER}" = "HEAD" ]; then
     CLEAN_VER="v20"
 fi
 
-# Device-Specific Configurations
-case "${DEVICE}" in
-    liber)
-        DEFCONFIG="vendor/liber_defconfig"
-        DEVICE_NAME="Motorola One Fusion+ (liber)"
-        ZIP_NAME_DEFAULT="anykernel"
-        ;;
-    hanoip)
-        DEFCONFIG="vendor/hanoip_defconfig"
-        DEVICE_NAME="Motorola Moto G40/G60 (hanoip)"
-        ZIP_NAME_DEFAULT="anykernel-hanoip"
-        ;;
-    odessa)
-        DEFCONFIG="vendor/odessa_defconfig"
-        DEVICE_NAME="Motorola Moto G9 Plus (odessa)"
-        ZIP_NAME_DEFAULT="anykernel-odessa"
-        ;;
-    *)
-        echo -e "${RED}[ERROR]: Unsupported device: ${DEVICE}${NC}"
-        exit 1
-        ;;
-esac
-
-# Dynamically resolve AnyKernel Directory relative to kernel root parent or environment
 PARENT_DIR="$(cd "${KERNEL_ROOT}/.." && pwd)"
-if [ -z "${ZIP_DIR}" ]; then
-    if [ -d "${PARENT_DIR}/${ZIP_NAME_DEFAULT}" ]; then
-        ZIP_DIR="${PARENT_DIR}/${ZIP_NAME_DEFAULT}"
-    elif [ -d "${KERNEL_ROOT}/${ZIP_NAME_DEFAULT}" ]; then
-        ZIP_DIR="${KERNEL_ROOT}/${ZIP_NAME_DEFAULT}"
-    elif [ -d "${PARENT_DIR}/anykernel" ]; then
-        ZIP_DIR="${PARENT_DIR}/anykernel"
-    elif [ -d "${HOME}/${ZIP_NAME_DEFAULT}" ]; then
-        ZIP_DIR="${HOME}/${ZIP_NAME_DEFAULT}"
-    else
-        ZIP_DIR="${PARENT_DIR}/${ZIP_NAME_DEFAULT}"
-    fi
-fi
-
 OUT_DIR="${KERNEL_ROOT}/out"
 BUILD_DIR="${KERNEL_ROOT}/build"
 
@@ -203,14 +213,12 @@ echo "=================================================="
 echo "          Cybertron Kernel Builder (${CLEAN_VER})          "
 echo "=================================================="
 echo -e "${NC}"
-echo -e " Target Device : ${GREEN}${BOLD}${DEVICE_NAME}${NC}"
-echo -e " Defconfig     : ${GREEN}${DEFCONFIG}${NC}"
-echo -e " Kernel Root   : ${KERNEL_ROOT}"
-echo -e " Kernel Ver    : ${GREEN}${CLEAN_VER}${NC}"
-echo -e " Out Directory : ${OUT_DIR}"
-echo -e " AnyKernel Dir : ${ZIP_DIR}"
-echo -e " KernelSU      : $([ "${ENABLE_KSU}" -eq 1 ] && echo -e "${GREEN}${BOLD}Enabled (manipvlator/KernelSU)${NC}" || echo -e "${YELLOW}Disabled${NC}")"
-echo -e " Build Threads : $(nproc --all)"
+echo -e " Target Device(s) : ${GREEN}${BOLD}${TARGET_DEVICES[*]}${NC}"
+echo -e " Kernel Root      : ${KERNEL_ROOT}"
+echo -e " Kernel Ver       : ${GREEN}${CLEAN_VER}${NC}"
+echo -e " Out Directory    : ${OUT_DIR}"
+echo -e " KernelSU         : $([ "${ENABLE_KSU}" -eq 1 ] && echo -e "${GREEN}${BOLD}Enabled (manipvlator/KernelSU)${NC}" || echo -e "${YELLOW}Disabled${NC}")"
+echo -e " Build Threads    : $(nproc --all)"
 echo "--------------------------------------------------"
 
 # Initialize/update git submodules if inside a git repository
@@ -287,8 +295,6 @@ export LD_LIBRARY_PATH="${NEUTRON_DIR}/lib:${LD_LIBRARY_PATH}"
 BUILD_CROSS_COMPILE="${GCC_DIR}/bin/aarch64-none-linux-gnu-"
 
 # Compiler & Ccache Configuration
-# Using an executable wrapper script ensures CC and HOSTCC are single valid binary paths,
-# preventing Kbuild scripts (which $(CC), cc-can-link) from breaking on multi-word strings.
 if command -v ccache &>/dev/null; then
     CCACHE_BIN_DIR="${OUT_DIR}/.ccache_bin"
     mkdir -p "${CCACHE_BIN_DIR}"
@@ -307,7 +313,7 @@ EOF
     else
         export CCACHE_DIR="/tmp/.ccache"
     fi
-    export CCACHE_MAXSIZE="2G"
+    export CCACHE_MAXSIZE="4G"
     export CCACHE_COMPRESS=1
     export CCACHE_COMPRESSLEVEL=6
     export CCACHE_SLOPPINESS="file_macro,time_macros,include_file_mtime"
@@ -386,50 +392,271 @@ else
     fi
 fi
 
-# Step 1: Configure Defconfig
-echo -e "${BLUE}[INFO]: Loading ${DEFCONFIG}...${NC}"
-make "${BUILD_OPTIONS[@]}" "${DEFCONFIG}"
+# Track generated packages
+SUCCESSFUL_BUILDS=()
 
-# Apply KernelSU configuration
-if [ "${ENABLE_KSU}" -eq 1 ]; then
-    echo -e "${BLUE}[INFO]: Enabling CONFIG_KSU in kernel configuration...${NC}"
-    "${KERNEL_ROOT}/scripts/config" --file "${OUT_DIR}/.config" --enable CONFIG_KSU
-    make "${BUILD_OPTIONS[@]}" olddefconfig
-fi
+# Main Build Loop for Target Devices
+for CURRENT_DEVICE in "${TARGET_DEVICES[@]}"; do
+    echo -e "\n${BLUE}${BOLD}=================================================="
+    echo "  Starting Build for Target: ${CURRENT_DEVICE}"
+    echo "==================================================${NC}\n"
 
-# Step 2: Interactive Menuconfig if requested
-if [ "${MENUCONFIG}" -eq 1 ]; then
-    echo -e "${CYAN}[INFO]: Launching menuconfig...${NC}"
-    make "${BUILD_OPTIONS[@]}" menuconfig
-    echo -e "${GREEN}[INFO]: Menuconfig finished. Exiting.${NC}"
-    exit 0
-fi
+    # Set Device-Specific Variables
+    case "${CURRENT_DEVICE}" in
+        liber)
+            DEFCONFIG="vendor/liber_defconfig"
+            DEVICE_NAME="Motorola One Fusion+ (liber)"
+            ZIP_NAME_DEFAULT="anykernel"
+            DTB_PATTERN="sdmmagpie-liber-base.dtb"
+            DEVICE_NAMES=("liber" "liber" "" "" "")
+            ;;
+        hanoip)
+            DEFCONFIG="vendor/hanoip_defconfig"
+            DEVICE_NAME="Motorola Moto G40/G60 (hanoip)"
+            ZIP_NAME_DEFAULT="anykernel-hanoip"
+            DTB_PATTERN="sdmmagpie-hanoi-base.dtb"
+            DEVICE_NAMES=("hanoip" "hanoi" "" "" "")
+            ;;
+        odessa)
+            DEFCONFIG="vendor/odessa_defconfig"
+            DEVICE_NAME="Motorola Moto G9 Plus (odessa)"
+            ZIP_NAME_DEFAULT="anykernel-odessa"
+            DTB_PATTERN="sdmmagpie-odessa-base.dtb"
+            DEVICE_NAMES=("odessa" "odessapr" "" "" "")
+            ;;
+        *)
+            echo -e "${RED}[ERROR]: Unsupported target device '${CURRENT_DEVICE}'! Skipping.${NC}"
+            continue
+            ;;
+    esac
 
-# Step 3: Compile Kernel Image, DTBs, and Modules
-START_TIME=$(date +%s)
-echo -e "\n${BLUE}[INFO]: Building Kernel Image, Device Tree Blobs (DTBs), and Modules...${NC}\n"
-
-make "${BUILD_OPTIONS[@]}" Image.gz dtbs modules
-
-# Ensure Image was generated
-KERNEL_IMG="${OUT_DIR}/arch/arm64/boot/Image.gz"
-if [ ! -f "${KERNEL_IMG}" ]; then
-    # Fallback to uncompressed Image if Image.gz was not built
-    if [ -f "${OUT_DIR}/arch/arm64/boot/Image" ]; then
-        echo -e "${YELLOW}[INFO]: Compressing raw Image to Image.gz...${NC}"
-        gzip -k -9 "${OUT_DIR}/arch/arm64/boot/Image"
-    else
-        echo -e "\n${RED}[ERROR]: Kernel compilation failed! No Image found in ${OUT_DIR}/arch/arm64/boot/${NC}"
-        exit 1
+    # Dynamically resolve AnyKernel Directory
+    TARGET_ZIP_DIR=""
+    if [ -n "${ZIP_DIR:-}" ]; then
+        if [ -d "${ZIP_DIR}_${CURRENT_DEVICE}" ]; then
+            TARGET_ZIP_DIR="${ZIP_DIR}_${CURRENT_DEVICE}"
+        elif [ -d "${ZIP_DIR}" ]; then
+            TARGET_ZIP_DIR="${ZIP_DIR}"
+        fi
     fi
+
+    if [ -z "${TARGET_ZIP_DIR}" ]; then
+        if [ -d "${PARENT_DIR}/${ZIP_NAME_DEFAULT}" ]; then
+            TARGET_ZIP_DIR="${PARENT_DIR}/${ZIP_NAME_DEFAULT}"
+        elif [ -d "${KERNEL_ROOT}/${ZIP_NAME_DEFAULT}" ]; then
+            TARGET_ZIP_DIR="${KERNEL_ROOT}/${ZIP_NAME_DEFAULT}"
+        elif [ -d "${PARENT_DIR}/anykernel" ]; then
+            TARGET_ZIP_DIR="${PARENT_DIR}/anykernel"
+        elif [ -d "${HOME}/${ZIP_NAME_DEFAULT}" ]; then
+            TARGET_ZIP_DIR="${HOME}/${ZIP_NAME_DEFAULT}"
+        else
+            TARGET_ZIP_DIR="${PARENT_DIR}/${ZIP_NAME_DEFAULT}"
+        fi
+    fi
+
+    # Auto-clone AnyKernel3 if missing
+    if [ ! -d "${TARGET_ZIP_DIR}" ]; then
+        echo -e "${YELLOW}[INFO]: AnyKernel directory not found at ${TARGET_ZIP_DIR}. Cloning AnyKernel3...${NC}"
+        git clone --depth=1 -b "${CURRENT_DEVICE}" https://github.com/DhineshCool/AnyKernel3.git "${TARGET_ZIP_DIR}" 2>/dev/null || \
+        git clone --depth=1 -b liber https://github.com/DhineshCool/AnyKernel3.git "${TARGET_ZIP_DIR}" 2>/dev/null || \
+        git clone --depth=1 https://github.com/DhineshCool/AnyKernel3.git "${TARGET_ZIP_DIR}" 2>/dev/null || \
+        git clone https://github.com/osm0sis/AnyKernel3.git "${TARGET_ZIP_DIR}"
+    fi
+
+    # Step 1: Clean stale config data and load Defconfig
+    echo -e "${BLUE}[INFO]: Loading ${DEFCONFIG} for ${DEVICE_NAME}...${NC}"
+    rm -f "${OUT_DIR}/kernel/config_data"* "${OUT_DIR}/.config"*
+    make "${BUILD_OPTIONS[@]}" "${DEFCONFIG}"
+
+    # Apply KernelSU configuration
+    if [ "${ENABLE_KSU}" -eq 1 ]; then
+        echo -e "${BLUE}[INFO]: Enabling CONFIG_KSU in kernel configuration...${NC}"
+        "${KERNEL_ROOT}/scripts/config" --file "${OUT_DIR}/.config" --enable CONFIG_KSU
+        make "${BUILD_OPTIONS[@]}" olddefconfig
+    fi
+
+    # Step 2: Interactive Menuconfig if requested
+    if [ "${MENUCONFIG}" -eq 1 ]; then
+        echo -e "${CYAN}[INFO]: Launching menuconfig...${NC}"
+        make "${BUILD_OPTIONS[@]}" menuconfig
+        echo -e "${GREEN}[INFO]: Menuconfig finished. Exiting.${NC}"
+        exit 0
+    fi
+
+    # Step 3: Compile Kernel Image, DTBs, and Modules
+    START_TIME=$(date +%s)
+    echo -e "\n${BLUE}[INFO]: Building Kernel Image, Device Tree Blobs (DTBs), and Modules for ${CURRENT_DEVICE}...${NC}\n"
+
+    make "${BUILD_OPTIONS[@]}" Image.gz dtbs modules
+
+    # Verify Image generation
+    KERNEL_IMG="${OUT_DIR}/arch/arm64/boot/Image.gz"
+    if [ ! -f "${KERNEL_IMG}" ]; then
+        if [ -f "${OUT_DIR}/arch/arm64/boot/Image" ]; then
+            echo -e "${YELLOW}[INFO]: Compressing raw Image to Image.gz...${NC}"
+            gzip -k -9 "${OUT_DIR}/arch/arm64/boot/Image"
+        else
+            echo -e "\n${RED}[ERROR]: Kernel compilation failed for ${CURRENT_DEVICE}! No Image found in ${OUT_DIR}/arch/arm64/boot/${NC}"
+            exit 1
+        fi
+    fi
+
+    END_TIME=$(date +%s)
+    BUILD_DURATION=$((END_TIME - START_TIME))
+    MINUTES=$((BUILD_DURATION / 60))
+    SECONDS=$((BUILD_DURATION % 60))
+
+    echo -e "\n${GREEN}${BOLD}[SUCCESS]: Kernel compilation for ${CURRENT_DEVICE} completed in ${MINUTES}m ${SECONDS}s!${NC}\n"
+
+    # Step 4: Copy Artifacts to Build Directory
+    cp -f "${KERNEL_IMG}" "${BUILD_DIR}/Image.gz"
+    if [ -f "${OUT_DIR}/arch/arm64/boot/Image" ]; then
+        cp -f "${OUT_DIR}/arch/arm64/boot/Image" "${BUILD_DIR}/Image"
+        cp -f "${OUT_DIR}/arch/arm64/boot/Image" "${BUILD_DIR}/Image-${CURRENT_DEVICE}"
+    fi
+
+    # Step 5: Packaging with AnyKernel3
+    TIMESTAMP=$(date +"%Y%m%d-%H%M")
+    if [ "${ENABLE_KSU}" -eq 1 ]; then
+        ZIP_NAME="Cybertron-${CLEAN_VER}-${CURRENT_DEVICE}-KSU-${TIMESTAMP}.zip"
+        ZIP_ALIAS="${CURRENT_DEVICE}-ksu.zip"
+    else
+        ZIP_NAME="Cybertron-${CLEAN_VER}-${CURRENT_DEVICE}-${TIMESTAMP}.zip"
+        ZIP_ALIAS="${CURRENT_DEVICE}.zip"
+    fi
+
+    if [ -d "${TARGET_ZIP_DIR}" ]; then
+        echo -e "${BLUE}[INFO]: Packaging AnyKernel3 flashable zip in ${TARGET_ZIP_DIR}...${NC}"
+        cd "${TARGET_ZIP_DIR}"
+        
+        # Clean previous build artifacts in AnyKernel directory
+        rm -f *.zip Image.gz dtb *.dtb Image
+        rm -rf modules
+
+        # Copy Kernel Image (prefer raw uncompressed Image for bootloader compatibility)
+        if [ -f "${BUILD_DIR}/Image" ]; then
+            cp -f "${BUILD_DIR}/Image" "${TARGET_ZIP_DIR}/Image"
+        elif [ -f "${BUILD_DIR}/Image.gz" ]; then
+            cp -f "${BUILD_DIR}/Image.gz" "${TARGET_ZIP_DIR}/Image.gz"
+        fi
+
+        # Concatenate or copy DTB matching device pattern
+        DTB_DIR="${OUT_DIR}/arch/arm64/boot/dts/qcom"
+        if [ -d "${DTB_DIR}" ]; then
+            MATCHED_DTBS=$(find "${DTB_DIR}" -maxdepth 1 -name "${DTB_PATTERN}" 2>/dev/null || true)
+            if [ -z "${MATCHED_DTBS}" ]; then
+                MATCHED_DTBS=$(find "${DTB_DIR}" -maxdepth 1 -name "*${CURRENT_DEVICE}*.dtb" 2>/dev/null || true)
+            fi
+
+            if [ -n "${MATCHED_DTBS}" ]; then
+                echo -e "${BLUE}[INFO]: Packaging DTB for ${CURRENT_DEVICE} (${MATCHED_DTBS})...${NC}"
+                cat ${MATCHED_DTBS} > "${TARGET_ZIP_DIR}/dtb" 2>/dev/null || true
+                cp -f "${TARGET_ZIP_DIR}/dtb" "${BUILD_DIR}/dtb" 2>/dev/null || true
+                cp -f "${TARGET_ZIP_DIR}/dtb" "${BUILD_DIR}/dtb-${CURRENT_DEVICE}" 2>/dev/null || true
+            else
+                echo -e "${YELLOW}[WARN]: No DTB found matching '${DTB_PATTERN}' in ${DTB_DIR}!${NC}"
+            fi
+        fi
+
+        # Collect and package built loadable kernel modules (.ko)
+        MODULES=$(find "${OUT_DIR}" -name "*.ko" 2>/dev/null || true)
+        if [ -n "${MODULES}" ]; then
+            echo -e "${BLUE}[INFO]: Packaging built kernel modules into AnyKernel3...${NC}"
+            MODULES_DIR="${TARGET_ZIP_DIR}/modules/vendor/lib/modules"
+            mkdir -p "${MODULES_DIR}"
+            for mod in ${MODULES}; do
+                mod_base="$(basename "${mod}")"
+                echo -e "  -> ${mod_base}"
+                "${STRIP}" --strip-unneeded "${mod}" -o "${MODULES_DIR}/${mod_base}" 2>/dev/null || \
+                    cp -f "${mod}" "${MODULES_DIR}/${mod_base}"
+            done
+            if [ -f "anykernel.sh" ]; then
+                sed -i "s/do.modules=.*/do.modules=1/g" anykernel.sh
+                sed -i "s/do.systemless=.*/do.systemless=0/g" anykernel.sh
+            fi
+        else
+            if [ -f "anykernel.sh" ]; then
+                sed -i "s/do.modules=.*/do.modules=0/g" anykernel.sh
+            fi
+        fi
+
+        # Update version file if present
+        if [ -f "version" ]; then
+            if [ "${ENABLE_KSU}" -eq 1 ]; then
+                sed -i "s/\"Cybertron[^\"]*\"/\"Cybertron-${CLEAN_VER}-KSU\"/g" version 2>/dev/null || true
+            else
+                sed -i "s/\"Cybertron[^\"]*\"/\"Cybertron-${CLEAN_VER}\"/g" version 2>/dev/null || true
+            fi
+            sed -i "s/For [a-zA-Z0-9_-]\+/For ${CURRENT_DEVICE}/g" version 2>/dev/null || true
+        fi
+
+        # Configure anykernel.sh dynamically
+        if [ -f "anykernel.sh" ]; then
+            for i in 1 2 3 4 5; do
+                idx=$((i - 1))
+                val="${DEVICE_NAMES[idx]:-}"
+                sed -i "s/device.name${i}=.*/device.name${i}=${val}/g" anykernel.sh
+            done
+
+            # Ensure slot and partition settings are auto-detected for Motorola A/B architecture
+            sed -i "s/^IS_SLOT_DEVICE=.*/IS_SLOT_DEVICE=auto;/g" anykernel.sh || true
+            sed -i "s/^RAMDISK_COMPRESSION=.*/RAMDISK_COMPRESSION=auto;/g" anykernel.sh || true
+            sed -i "s/^PATCH_VBMETA_FLAG=.*/PATCH_VBMETA_FLAG=auto;/g" anykernel.sh || true
+
+            VER_NUM="${CLEAN_VER//[!0-9]/}"
+            [ -z "${VER_NUM}" ] && VER_NUM="1"
+
+            if [ "${ENABLE_KSU}" -eq 1 ]; then
+                sed -i "s/kernel\.string=.*/kernel.string=Cybertron Kernel ${CLEAN_VER} (KernelSU) by cool585/g" anykernel.sh
+                sed -i "s/^version=.*/version=${CLEAN_VER}-KSU/g" anykernel.sh
+            else
+                sed -i "s/kernel\.string=.*/kernel.string=Cybertron Kernel ${CLEAN_VER} by cool585/g" anykernel.sh
+                sed -i "s/^version=.*/version=${CLEAN_VER}/g" anykernel.sh
+            fi
+            sed -i "s/^versionCode=.*/versionCode=${VER_NUM}/g" anykernel.sh
+        fi
+
+        # Create flashable zip package
+        zip -r9 "${ZIP_NAME}" ./* -x .git* README.md ./*placeholder &>/dev/null
+
+        # Create copy aliases
+        cp -f "${ZIP_NAME}" "${BUILD_DIR}/${ZIP_NAME}"
+        cp -f "${ZIP_NAME}" "${TARGET_ZIP_DIR}/${ZIP_ALIAS}"
+        cp -f "${ZIP_NAME}" "${BUILD_DIR}/${ZIP_ALIAS}"
+        cp -f "${ZIP_NAME}" "${TARGET_ZIP_DIR}/${CURRENT_DEVICE}.zip"
+        cp -f "${ZIP_NAME}" "${BUILD_DIR}/${CURRENT_DEVICE}.zip"
+
+        ZIP_SIZE=$(du -h "${BUILD_DIR}/${ZIP_NAME}" | cut -f1)
+
+        echo -e "\n${GREEN}${BOLD}=================================================="
+        echo "            FLASHABLE ZIP GENERATED!             "
+        echo "==================================================${NC}"
+        echo -e " Device     : ${GREEN}${BOLD}${DEVICE_NAME}${NC}"
+        echo -e " File       : ${CYAN}${BOLD}${ZIP_NAME}${NC} (${ZIP_SIZE})"
+        echo -e " Location   : ${GREEN}${BUILD_DIR}/${ZIP_NAME}${NC}"
+        echo -e " Alias      : ${GREEN}${BUILD_DIR}/${CURRENT_DEVICE}.zip${NC}"
+        echo -e " Total Time : ${BOLD}${MINUTES}m ${SECONDS}s${NC}"
+        echo "=================================================="
+
+        SUCCESSFUL_BUILDS+=("${CURRENT_DEVICE}: ${ZIP_NAME} (${ZIP_SIZE}) in ${MINUTES}m ${SECONDS}s")
+    else
+        echo -e "${YELLOW}[WARN]: ZIP_DIR (${TARGET_ZIP_DIR}) not found. Flashable zip skipped for ${CURRENT_DEVICE}.${NC}"
+        echo -e "Kernel Image is available at: ${GREEN}${BUILD_DIR}/Image.gz${NC}"
+    fi
+
+    cd "${KERNEL_ROOT}"
+done
+
+# Print final multi-device summary if more than one device was built
+if [ "${#SUCCESSFUL_BUILDS[@]}" -gt 1 ]; then
+    echo -e "\n${CYAN}${BOLD}=================================================="
+    echo "            ALL BUILDS COMPLETED!                "
+    echo "==================================================${NC}"
+    for summary in "${SUCCESSFUL_BUILDS[@]}"; do
+        echo -e "  * ${GREEN}${summary}${NC}"
+    done
+    echo -e "${CYAN}==================================================${NC}\n"
 fi
-
-END_TIME=$(date +%s)
-BUILD_DURATION=$((END_TIME - START_TIME))
-MINUTES=$((BUILD_DURATION / 60))
-SECONDS=$((BUILD_DURATION % 60))
-
-echo -e "\n${GREEN}${BOLD}[SUCCESS]: Kernel compilation completed in ${MINUTES}m ${SECONDS}s!${NC}\n"
 
 # Display Ccache Performance Statistics if enabled
 if command -v ccache &>/dev/null && [ -d "${CCACHE_DIR:-${HOME}/.ccache}" ]; then
@@ -438,133 +665,4 @@ if command -v ccache &>/dev/null && [ -d "${CCACHE_DIR:-${HOME}/.ccache}" ]; the
     echo "================================"
 fi
 
-# Step 4: Copy Artifacts to Build Directory
-cp -f "${KERNEL_IMG}" "${BUILD_DIR}/Image.gz"
-if [ -f "${OUT_DIR}/arch/arm64/boot/Image" ]; then
-    cp -f "${OUT_DIR}/arch/arm64/boot/Image" "${BUILD_DIR}/Image"
-fi
-
-# Step 5: Packaging with AnyKernel3
-TIMESTAMP=$(date +"%Y%m%d-%H%M")
-if [ "${ENABLE_KSU}" -eq 1 ]; then
-    ZIP_NAME="Cybertron-${CLEAN_VER}-${DEVICE}-KSU-${TIMESTAMP}.zip"
-    ZIP_ALIAS="${DEVICE}-ksu.zip"
-else
-    ZIP_NAME="Cybertron-${CLEAN_VER}-${DEVICE}-${TIMESTAMP}.zip"
-    ZIP_ALIAS="${DEVICE}.zip"
-fi
-
-# Auto-clone AnyKernel3 if missing
-if [ ! -d "${ZIP_DIR}" ]; then
-    echo -e "${YELLOW}[INFO]: AnyKernel directory not found at ${ZIP_DIR}. Cloning AnyKernel3...${NC}"
-    git clone --depth=1 -b "${DEVICE}" https://github.com/DhineshCool/AnyKernel3.git "${ZIP_DIR}" 2>/dev/null || \
-    git clone --depth=1 https://github.com/DhineshCool/AnyKernel3.git "${ZIP_DIR}" 2>/dev/null || \
-    git clone https://github.com/osm0sis/AnyKernel3.git "${ZIP_DIR}"
-fi
-
-if [ -d "${ZIP_DIR}" ]; then
-    echo -e "${BLUE}[INFO]: Packaging AnyKernel3 flashable zip in ${ZIP_DIR}...${NC}"
-    cd "${ZIP_DIR}"
-    
-    # Clean previous builds
-    rm -f *.zip Image.gz dtb *.dtb Image
-    rm -rf modules
-
-    # Copy Kernel Image (prefer raw uncompressed Image for bootloader compatibility)
-    if [ -f "${BUILD_DIR}/Image" ]; then
-        cp -f "${BUILD_DIR}/Image" "${ZIP_DIR}/Image"
-    elif [ -f "${BUILD_DIR}/Image.gz" ]; then
-        cp -f "${BUILD_DIR}/Image.gz" "${ZIP_DIR}/Image.gz"
-    fi
-
-    # Concatenate or copy DTBs if device requires them (e.g. liber)
-    DTB_DIR="${OUT_DIR}/arch/arm64/boot/dts/qcom"
-    if [ -d "${DTB_DIR}" ]; then
-        MAGPIE_DTBS=$(find "${DTB_DIR}" -maxdepth 1 -name "*${DEVICE}*.dtb" 2>/dev/null || true)
-        if [ -n "${MAGPIE_DTBS}" ]; then
-            echo -e "${BLUE}[INFO]: Concatenating DTBs for ${DEVICE}...${NC}"
-            cat "${DTB_DIR}"/*"${DEVICE}"*.dtb > "${ZIP_DIR}/dtb" 2>/dev/null || true
-            cp -f "${ZIP_DIR}/dtb" "${BUILD_DIR}/dtb" 2>/dev/null || true
-       fi
-    fi
-    # Collect and package built loadable kernel modules (.ko)
-    MODULES=$(find "${OUT_DIR}" -name "*.ko" 2>/dev/null || true)
-    if [ -n "${MODULES}" ]; then
-        echo -e "${BLUE}[INFO]: Packaging built kernel modules into AnyKernel3...${NC}"
-        MODULES_DIR="${ZIP_DIR}/modules/vendor/lib/modules"
-        mkdir -p "${MODULES_DIR}"
-        for mod in ${MODULES}; do
-            mod_base="$(basename "${mod}")"
-            echo -e "  -> ${mod_base}"
-            "${STRIP}" --strip-unneeded "${mod}" -o "${MODULES_DIR}/${mod_base}" 2>/dev/null || \
-                cp -f "${mod}" "${MODULES_DIR}/${mod_base}"
-        done
-        if [ -f "anykernel.sh" ]; then
-            sed -i "s/do.modules=.*/do.modules=1/g" anykernel.sh
-            sed -i "s/do.systemless=.*/do.systemless=0/g" anykernel.sh
-        fi
-    else
-        if [ -f "anykernel.sh" ]; then
-            sed -i "s/do.modules=.*/do.modules=0/g" anykernel.sh
-        fi
-    fi
-
-    # Update version banner if version file exists
-    if [ -f "version" ]; then
-        if [ "${ENABLE_KSU}" -eq 1 ]; then
-            sed -i "s/\"Cybertron[^\"]*\"/\"Cybertron-${CLEAN_VER}-KSU\"/g" version 2>/dev/null || true
-        else
-            sed -i "s/\"Cybertron[^\"]*\"/\"Cybertron-${CLEAN_VER}\"/g" version 2>/dev/null || true
-        fi
-        sed -i "s/For [a-zA-Z0-9_-]\+/For ${DEVICE}/g" version 2>/dev/null || true
-    fi
-
-    # Configure anykernel.sh dynamically
-    if [ -f "anykernel.sh" ]; then
-        sed -i "s/device.name1=.*/device.name1=${DEVICE}/g" anykernel.sh
-        sed -i "s/device.name2=.*/device.name2=${DEVICE}/g" anykernel.sh
-        sed -i "s/device.name3=.*/device.name3=/g" anykernel.sh
-        sed -i "s/device.name4=.*/device.name4=/g" anykernel.sh
-        sed -i "s/device.name5=.*/device.name5=/g" anykernel.sh
-
-        # Extract numeric version if available (e.g. 20 from v20, 19 from v19)
-        VER_NUM="${CLEAN_VER//[!0-9]/}"
-        [ -z "${VER_NUM}" ] && VER_NUM="1"
-
-        if [ "${ENABLE_KSU}" -eq 1 ]; then
-            sed -i "s/kernel\.string=.*/kernel.string=Cybertron Kernel ${CLEAN_VER} (KernelSU) by cool585/g" anykernel.sh
-            sed -i "s/^version=.*/version=${CLEAN_VER}-KSU/g" anykernel.sh
-        else
-            sed -i "s/kernel\.string=.*/kernel.string=Cybertron Kernel ${CLEAN_VER} by cool585/g" anykernel.sh
-            sed -i "s/^version=.*/version=${CLEAN_VER}/g" anykernel.sh
-        fi
-        sed -i "s/^versionCode=.*/versionCode=${VER_NUM}/g" anykernel.sh
-    fi
-
-    # Create flashable zip
-    zip -r9 "${ZIP_NAME}" ./* -x .git* README.md ./*placeholder &>/dev/null
-
-    # Create convenient copy aliases
-    cp -f "${ZIP_NAME}" "${BUILD_DIR}/${ZIP_NAME}"
-    cp -f "${ZIP_NAME}" "${ZIP_DIR}/${ZIP_ALIAS}"
-    cp -f "${ZIP_NAME}" "${BUILD_DIR}/${ZIP_ALIAS}"
-    cp -f "${ZIP_NAME}" "${ZIP_DIR}/${DEVICE}.zip"
-    cp -f "${ZIP_NAME}" "${BUILD_DIR}/${DEVICE}.zip"
-
-    ZIP_SIZE=$(du -h "${BUILD_DIR}/${ZIP_NAME}" | cut -f1)
-
-    echo -e "\n${GREEN}${BOLD}=================================================="
-    echo "            FLASHABLE ZIP GENERATED!             "
-    echo "==================================================${NC}"
-    echo -e " File       : ${CYAN}${BOLD}${ZIP_NAME}${NC} (${ZIP_SIZE})"
-    echo -e " Location   : ${GREEN}${BUILD_DIR}/${ZIP_NAME}${NC}"
-    echo -e " Alias      : ${GREEN}${BUILD_DIR}/${DEVICE}.zip${NC}"
-    echo -e " Total Time : ${BOLD}${MINUTES}m ${SECONDS}s${NC}"
-    echo "=================================================="
-else
-    echo -e "${YELLOW}[WARN]: ZIP_DIR (${ZIP_DIR}) not found. Flashable zip skipped.${NC}"
-    echo -e "Kernel Image is available at: ${GREEN}${BUILD_DIR}/Image.gz${NC}"
-fi
-
-cd "${KERNEL_ROOT}"
 exit 0

@@ -9,7 +9,7 @@ on:
         default: ''
         type: string
       device:
-        description: 'Target Device'
+        description: 'Target Device (all, liber, hanoip, odessa)'
         required: true
         default: 'all'
         type: choice
@@ -150,16 +150,15 @@ jobs:
 
       - name: Setup AnyKernel3 (${{ matrix.device }})
         run: |
-          # Use AnyKernel3 -b liber for liber, -b hanoip for hanoip, and -b odessa for odessa
           AK_BRANCH="${{ matrix.device }}"
           AK_DIR="${RUNNER_WORKSPACE}/anykernel_${{ matrix.device }}"
           rm -rf "${AK_DIR}"
           
-          echo "Cloning AnyKernel3 (branch: ${AK_BRANCH}) from DhineshCool/AnyKernel3..."
-          git clone --depth=1 -b "${AK_BRANCH}" https://github.com/DhineshCool/AnyKernel3.git "${AK_DIR}" || {
-            echo "Warning: Branch ${AK_BRANCH} failed to clone, falling back to repository default..."
-            git clone --depth=1 https://github.com/DhineshCool/AnyKernel3.git "${AK_DIR}"
-          }
+          echo "Cloning AnyKernel3 for ${{ matrix.device }}..."
+          git clone --depth=1 -b "${AK_BRANCH}" https://github.com/DhineshCool/AnyKernel3.git "${AK_DIR}" 2>/dev/null || \
+          git clone --depth=1 -b liber https://github.com/DhineshCool/AnyKernel3.git "${AK_DIR}" 2>/dev/null || \
+          git clone --depth=1 https://github.com/DhineshCool/AnyKernel3.git "${AK_DIR}" 2>/dev/null || \
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git "${AK_DIR}"
 
           # Export ZIP_DIR for cyber.sh
           echo "ZIP_DIR=${AK_DIR}" >> $GITHUB_ENV
@@ -180,7 +179,7 @@ jobs:
           fi
 
           set -o pipefail
-          bash -x ./cyber.sh "${{ matrix.device }}" ${BUILD_FLAGS} 2>&1 | tee build.log
+          ./cyber.sh "${{ matrix.device }}" ${BUILD_FLAGS} 2>&1 | tee build.log
 
       - name: Upload Kernel Artifacts (${{ matrix.device }})
         if: always()
@@ -189,8 +188,9 @@ jobs:
           name: Cybertron-${{ needs.setup-matrix.outputs.target_branch }}-${{ matrix.device }}
           path: |
             build/*.zip
+            build/Image
             build/Image.gz
-            build/dtb
+            build/dtb*
             build.log
           retention-days: 7
 
@@ -207,6 +207,13 @@ jobs:
             echo "Telegram secrets not set; skipping notification."
             exit 0
           fi
+
+          case "${DEVICE}" in
+            liber)  DEVICE_LABEL="Motorola One Fusion+ (liber)" ;;
+            hanoip) DEVICE_LABEL="Motorola Moto G40/G60 (hanoip)" ;;
+            odessa) DEVICE_LABEL="Motorola Moto G9 Plus (odessa)" ;;
+            *)      DEVICE_LABEL="${DEVICE}" ;;
+          esac
 
           FULL_SHA="${{ github.sha }}"
           SHORT_SHA="${FULL_SHA:0:7}"
@@ -232,7 +239,7 @@ jobs:
               fi
 
               CAPTION="${TITLE_LINE}${NL}${NL}"
-              CAPTION="${CAPTION}📱 <b>Device:</b> <code>${DEVICE}</code>${NL}"
+              CAPTION="${CAPTION}📱 <b>Device:</b> <code>${DEVICE_LABEL}</code>${NL}"
               CAPTION="${CAPTION}🌿 <b>Branch:</b> <code>${BRANCH}</code>${NL}"
               CAPTION="${CAPTION}🔖 <b>Commit:</b> <a href=\"${COMMIT_URL}\">${SHORT_SHA}</a>${NL}"
               CAPTION="${CAPTION}💬 <b>Message:</b> ${SAFE_TITLE}${NL}"
@@ -262,7 +269,7 @@ jobs:
               FAIL_TITLE="❌ <b>Cybertron Kernel (KernelSU) Build Failed!</b>"
             fi
             FAIL_MSG="${FAIL_TITLE}${NL}${NL}"
-            FAIL_MSG="${FAIL_MSG}📱 <b>Device:</b> <code>${DEVICE}</code>${NL}"
+            FAIL_MSG="${FAIL_MSG}📱 <b>Device:</b> <code>${DEVICE_LABEL}</code>${NL}"
             FAIL_MSG="${FAIL_MSG}🌿 <b>Branch:</b> <code>${BRANCH}</code>${NL}"
             FAIL_MSG="${FAIL_MSG}🔖 <b>Commit:</b> <a href=\"${COMMIT_URL}\">${SHORT_SHA}</a>${NL}"
             FAIL_MSG="${FAIL_MSG}💬 <b>Message:</b> ${SAFE_TITLE}${NL}"
@@ -283,7 +290,7 @@ jobs:
             if [ -f "build.log" ]; then
               curl -s -F "chat_id=${CHAT_ID}" \
                    -F "document=@build.log" \
-                   -F "caption=📄 <b>Build log for ${DEVICE} (${BRANCH})</b>" \
+                   -F "caption=📄 <b>Build log for ${DEVICE_LABEL} (${BRANCH})</b>" \
                    -F "parse_mode=HTML" \
                    "https://api.telegram.org/bot${BOT_TOKEN}/sendDocument" || true
             fi
