@@ -11,12 +11,14 @@ on:
       device:
         description: 'Target Device'
         required: true
-        default: 'both'
+        default: 'all'
         type: choice
         options:
-          - both
+          - all
           - liber
           - hanoip
+          - odessa
+          - both
       clean:
         description: 'Clean build'
         required: true
@@ -53,17 +55,19 @@ jobs:
           INPUT_DEVICE="${{ github.event.inputs.device || inputs.device || '' }}"
           COMMIT_MSG="${{ github.event.head_commit.message }}"
           if [ -z "$INPUT_DEVICE" ]; then
-            if [[ "${COMMIT_MSG,,}" == *"[liber]"* ]] || ([[ "${COMMIT_MSG,,}" == *"liber"* ]] && [[ "${COMMIT_MSG,,}" != *"hanoip"* ]]); then
+            if [[ "${COMMIT_MSG,,}" == *"[liber]"* ]] || ([[ "${COMMIT_MSG,,}" == *"liber"* ]] && [[ "${COMMIT_MSG,,}" != *"hanoip"* ]] && [[ "${COMMIT_MSG,,}" != *"odessa"* ]]); then
               INPUT_DEVICE="liber"
-            elif [[ "${COMMIT_MSG,,}" == *"[hanoip]"* ]] || ([[ "${COMMIT_MSG,,}" == *"hanoip"* ]] && [[ "${COMMIT_MSG,,}" != *"liber"* ]]); then
+            elif [[ "${COMMIT_MSG,,}" == *"[hanoip]"* ]] || ([[ "${COMMIT_MSG,,}" == *"hanoip"* ]] && [[ "${COMMIT_MSG,,}" != *"liber"* ]] && [[ "${COMMIT_MSG,,}" != *"odessa"* ]]); then
               INPUT_DEVICE="hanoip"
+            elif [[ "${COMMIT_MSG,,}" == *"[odessa]"* ]] || ([[ "${COMMIT_MSG,,}" == *"odessa"* ]] && [[ "${COMMIT_MSG,,}" != *"liber"* ]] && [[ "${COMMIT_MSG,,}" != *"hanoip"* ]]); then
+              INPUT_DEVICE="odessa"
             else
-              INPUT_DEVICE="both"
+              INPUT_DEVICE="all"
             fi
           fi
 
-          if [ "$INPUT_DEVICE" = "both" ]; then
-            echo 'devices=["liber", "hanoip"]' >> $GITHUB_OUTPUT
+          if [ "$INPUT_DEVICE" = "all" ] || [ "$INPUT_DEVICE" = "both" ]; then
+            echo 'devices=["liber", "hanoip", "odessa"]' >> $GITHUB_OUTPUT
           else
             echo "devices=[\"$INPUT_DEVICE\"]" >> $GITHUB_OUTPUT
           fi
@@ -146,7 +150,7 @@ jobs:
 
       - name: Setup AnyKernel3 (${{ matrix.device }})
         run: |
-          # Use AnyKernel3 -b liber for liber, and -b hanoip for hanoip
+          # Use AnyKernel3 -b liber for liber, -b hanoip for hanoip, and -b odessa for odessa
           AK_BRANCH="${{ matrix.device }}"
           AK_DIR="${RUNNER_WORKSPACE}/anykernel_${{ matrix.device }}"
           rm -rf "${AK_DIR}"

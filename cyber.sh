@@ -68,6 +68,7 @@ show_help() {
     echo "  odessa    - Motorola Moto G9 Plus (vendor/odessa_defconfig)"
     echo ""
     echo -e "${BOLD}Options:${NC}"
+    echo "  -d, --device <dev>      Target device (liber, hanoip, odessa)"
     echo "  -c, --clean             Clean out directory before building"
     echo "  -k, --ksu               Build kernel with KernelSU (manipvlator/KernelSU)"
     echo "  -m, --menuconfig        Launch kernel menuconfig interface"
@@ -78,6 +79,7 @@ show_help() {
     echo "  $0 liber"
     echo "  $0 hanoip --clean"
     echo "  $0 odessa"
+    echo "  $0 odessa --ksu"
     echo "  $0 liber --ksu"
     echo "  $0 liber -m"
     exit 0
@@ -87,6 +89,14 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         liber|hanoip|odessa)
             DEVICE="$1"
+            shift
+            ;;
+        -d|--device)
+            DEVICE="$2"
+            shift 2
+            ;;
+        -d=*|--device=*)
+            DEVICE="${1#*=}"
             shift
             ;;
         -c|--clean)
@@ -446,7 +456,9 @@ fi
 
 # Auto-clone AnyKernel3 if missing
 if [ ! -d "${ZIP_DIR}" ]; then
-    echo -e "${YELLOW}[INFO]: AnyKernel directory not found at ${ZIP_DIR}. Cloning fallback AnyKernel3...${NC}"
+    echo -e "${YELLOW}[INFO]: AnyKernel directory not found at ${ZIP_DIR}. Cloning AnyKernel3...${NC}"
+    git clone --depth=1 -b "${DEVICE}" https://github.com/DhineshCool/AnyKernel3.git "${ZIP_DIR}" 2>/dev/null || \
+    git clone --depth=1 https://github.com/DhineshCool/AnyKernel3.git "${ZIP_DIR}" 2>/dev/null || \
     git clone https://github.com/osm0sis/AnyKernel3.git "${ZIP_DIR}"
 fi
 
@@ -510,6 +522,9 @@ if [ -d "${ZIP_DIR}" ]; then
     if [ -f "anykernel.sh" ]; then
         sed -i "s/device.name1=.*/device.name1=${DEVICE}/g" anykernel.sh
         sed -i "s/device.name2=.*/device.name2=${DEVICE}/g" anykernel.sh
+        sed -i "s/device.name3=.*/device.name3=/g" anykernel.sh
+        sed -i "s/device.name4=.*/device.name4=/g" anykernel.sh
+        sed -i "s/device.name5=.*/device.name5=/g" anykernel.sh
 
         # Extract numeric version if available (e.g. 20 from v20, 19 from v19)
         VER_NUM="${CLEAN_VER//[!0-9]/}"
