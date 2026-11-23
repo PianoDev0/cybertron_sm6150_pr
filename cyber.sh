@@ -422,7 +422,7 @@ for CURRENT_DEVICE in "${TARGET_DEVICES[@]}"; do
             DEVICE_NAME="Motorola Moto G9 Plus (odessa)"
             ZIP_NAME_DEFAULT="anykernel-odessa"
             DTB_PATTERN="sdmmagpie-odessa-base.dtb"
-            DEVICE_NAMES=("odessa" "odessapr" "" "" "")
+            DEVICE_NAMES=("odessa" "odessapr" "moto g(9) plus" "moto g 9 plus" "")
             ;;
         *)
             echo -e "${RED}[ERROR]: Unsupported target device '${CURRENT_DEVICE}'! Skipping.${NC}"
