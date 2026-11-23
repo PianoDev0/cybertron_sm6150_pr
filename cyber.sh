@@ -5,7 +5,7 @@
 #   - Motorola One Fusion+ [liber]
 #   - Motorola Moto G40/G60 [hanoip]
 #   - Motorola Moto G9 Plus [odessa]
-# Base: Linux 4.14.357-openela (Cybertron Kernel v20 - ccache accelerated)
+# Base: Linux 4.14.357-openela (Cybertron Kernel v20.5 - ccache accelerated)
 # Maintainer: cool585 (DhineshCool)
 #
 
@@ -194,9 +194,9 @@ elif [[ "${CLEAN_VER,,}" == *ksu ]] && [ "${#CLEAN_VER}" -gt 3 ]; then
     CLEAN_VER="${CLEAN_VER%[kK][sS][uU]}"
 fi
 
-# Fallback to v20 if branch is detached or empty
+# Fallback to v20.5 if branch is detached or empty
 if [ -z "${CLEAN_VER}" ] || [ "${CLEAN_VER}" = "HEAD" ]; then
-    CLEAN_VER="v20"
+    CLEAN_VER="v20.5"
 fi
 
 PARENT_DIR="$(cd "${KERNEL_ROOT}/.." && pwd)"
