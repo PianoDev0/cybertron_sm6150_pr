@@ -116,6 +116,9 @@
 		/* Context aware jump target power level */
 		qcom,ca-target-pwrlevel = <3>;
 
+		/* Disable busy time burst to prevent jumping straight to max freq */
+		qcom,disable-busy-time-burst;
+
 		qcom,gpu-speed-bin = <0x6004 0x1fe00000 21>;
 
 		/* GPU Mempools */
