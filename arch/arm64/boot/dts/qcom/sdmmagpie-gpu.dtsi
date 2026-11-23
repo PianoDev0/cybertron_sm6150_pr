@@ -132,6 +132,9 @@
 		/* Context aware jump busy penalty in us */
 		qcom,ca-busy-penalty = <12000>;
 
+		/* Disable busy time burst to avoid forced jumps to max freq */
+		qcom,disable-busy-time-burst;
+
 		qcom,gpu-speed-bin = <0x41a0 0x1fe00000 21>;
 
 		/* GPU Mempools */
