@@ -414,8 +414,8 @@ for CURRENT_DEVICE in "${TARGET_DEVICES[@]}"; do
             DEFCONFIG="vendor/hanoip_defconfig"
             DEVICE_NAME="Motorola Moto G40/G60 (hanoip)"
             ZIP_NAME_DEFAULT="anykernel-hanoip"
-            DTB_PATTERN="sdmmagpie-hanoi-base.dtb"
-            DEVICE_NAMES=("hanoip" "hanoi" "" "" "")
+            DTB_PATTERN=""
+            DEVICE_NAMES=("hanoip" "hanoip" "moto g(60)" "moto g(40) fusion" "")
             ;;
         odessa)
             DEFCONFIG="vendor/odessa_defconfig"
@@ -533,28 +533,27 @@ for CURRENT_DEVICE in "${TARGET_DEVICES[@]}"; do
         rm -f *.zip Image.gz dtb *.dtb Image
         rm -rf modules
 
-        # Copy Kernel Image (prefer raw uncompressed Image for bootloader compatibility)
-        if [ -f "${BUILD_DIR}/Image" ]; then
-            cp -f "${BUILD_DIR}/Image" "${TARGET_ZIP_DIR}/Image"
-        elif [ -f "${BUILD_DIR}/Image.gz" ]; then
+        # Copy Kernel Image (always Image.gz for bootloader compatibility on header v3/v2)
+        if [ -f "${BUILD_DIR}/Image.gz" ]; then
             cp -f "${BUILD_DIR}/Image.gz" "${TARGET_ZIP_DIR}/Image.gz"
+        elif [ -f "${BUILD_DIR}/Image" ]; then
+            echo -e "${YELLOW}[INFO]: Compressing raw Image to Image.gz...${NC}"
+            gzip -k -9 "${BUILD_DIR}/Image" -c > "${TARGET_ZIP_DIR}/Image.gz"
         fi
 
-        # Concatenate or copy DTB matching device pattern
-        DTB_DIR="${OUT_DIR}/arch/arm64/boot/dts/qcom"
-        if [ -d "${DTB_DIR}" ]; then
-            MATCHED_DTBS=$(find "${DTB_DIR}" -maxdepth 1 -name "${DTB_PATTERN}" 2>/dev/null || true)
-            if [ -z "${MATCHED_DTBS}" ]; then
-                MATCHED_DTBS=$(find "${DTB_DIR}" -maxdepth 1 -name "*${CURRENT_DEVICE}*.dtb" 2>/dev/null || true)
-            fi
-
-            if [ -n "${MATCHED_DTBS}" ]; then
-                echo -e "${BLUE}[INFO]: Packaging DTB for ${CURRENT_DEVICE} (${MATCHED_DTBS})...${NC}"
-                cat ${MATCHED_DTBS} > "${TARGET_ZIP_DIR}/dtb" 2>/dev/null || true
-                cp -f "${TARGET_ZIP_DIR}/dtb" "${BUILD_DIR}/dtb" 2>/dev/null || true
-                cp -f "${TARGET_ZIP_DIR}/dtb" "${BUILD_DIR}/dtb-${CURRENT_DEVICE}" 2>/dev/null || true
-            else
-                echo -e "${YELLOW}[WARN]: No DTB found matching '${DTB_PATTERN}' in ${DTB_DIR}!${NC}"
+        # Concatenate or copy DTB matching device pattern (only if DTB_PATTERN is non-empty)
+        if [ -n "${DTB_PATTERN}" ]; then
+            DTB_DIR="${OUT_DIR}/arch/arm64/boot/dts/qcom"
+            if [ -d "${DTB_DIR}" ]; then
+                MATCHED_DTBS=$(find "${DTB_DIR}" -maxdepth 1 -name "${DTB_PATTERN}" 2>/dev/null || true)
+                if [ -n "${MATCHED_DTBS}" ]; then
+                    echo -e "${BLUE}[INFO]: Packaging DTB for ${CURRENT_DEVICE} (${MATCHED_DTBS})...${NC}"
+                    cat ${MATCHED_DTBS} > "${TARGET_ZIP_DIR}/dtb" 2>/dev/null || true
+                    cp -f "${TARGET_ZIP_DIR}/dtb" "${BUILD_DIR}/dtb" 2>/dev/null || true
+                    cp -f "${TARGET_ZIP_DIR}/dtb" "${BUILD_DIR}/dtb-${CURRENT_DEVICE}" 2>/dev/null || true
+                else
+                    echo -e "${YELLOW}[WARN]: No DTB found matching '${DTB_PATTERN}' in ${DTB_DIR}!${NC}"
+                fi
             fi
         fi
 
@@ -571,8 +570,8 @@ for CURRENT_DEVICE in "${TARGET_DEVICES[@]}"; do
                     cp -f "${mod}" "${MODULES_DIR}/${mod_base}"
             done
             if [ -f "anykernel.sh" ]; then
-                sed -i "s/do.modules=.*/do.modules=1/g" anykernel.sh
-                sed -i "s/do.systemless=.*/do.systemless=0/g" anykernel.sh
+                sed -i "s/do.modules=.*/do.modules=0/g" anykernel.sh
+                sed -i "s/do.systemless=.*/do.systemless=1/g" anykernel.sh
             fi
         else
             if [ -f "anykernel.sh" ]; then
